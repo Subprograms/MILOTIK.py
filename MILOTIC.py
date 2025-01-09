@@ -397,107 +397,111 @@ class MILOTIC:
             y_defense = (df['Tactic'] == 'Defense Evasion').astype(int)
             y_persistence = (df['Tactic'] == 'Persistence').astype(int)
 
-            # Recursive Feature Elimination (RFE) for feature selection
+            # Perform Recursive Feature Elimination (RFE) for feature selection
             print("Performing RFE for feature selection...")
             rfe_model = RandomForestClassifier(n_estimators=100, random_state=42)
             rfe = RFE(estimator=rfe_model, n_features_to_select=10)
             X_selected = rfe.fit_transform(X, y_label)
-            self.selected_features = X.columns[rfe.support_]
+            self.selected_features = df.drop(columns=['Label', 'Tactic']).columns[rfe.support_]
             print(f"Selected features: {list(self.selected_features)}")
 
             # Convert X_selected back to DataFrame with selected feature names
             X_selected_df = pd.DataFrame(X_selected, columns=self.selected_features)
 
+            # Split the data into training, validation, and test sets
+            X_train, X_temp, y_train_label, y_temp_label = train_test_split(X_selected_df, y_label, test_size=0.3, random_state=42)
+            X_val, X_test, y_val_label, y_test_label = train_test_split(X_temp, y_temp_label, test_size=0.5, random_state=42)
+
             skf = StratifiedKFold(n_splits=10)
 
-            # Train and evaluate Label Model
+            # Train and evaluate Label Model using K-Fold cross-validation
             label_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            label_scores = cross_val_score(label_model, X_selected_df, y_label, cv=skf)
-            label_model.fit(X_selected_df, y_label)
-            joblib.dump(label_model, os.path.join(self.sModelOutputDir, "label_model.joblib"))
-            self.sLabelModelPath = os.path.join(self.sModelOutputDir, "label_model.joblib")
+            label_scores = cross_val_score(label_model, X_train, y_train_label, cv=skf)
+            label_model.fit(X_train, y_train_label)
 
-            # Calculate additional metrics for Label Model
-            y_pred_label = label_model.predict(X_selected_df)
-            precision_label = precision_score(y_label, y_pred_label)
-            recall_label = recall_score(y_label, y_pred_label)
-            f1_label = f1_score(y_label, y_pred_label)
-            
-            # ROC AUC and optimal threshold for Label Model
-            y_scores_label = label_model.predict_proba(X_selected_df)[:, 1]
-            fpr, tpr, thresholds = roc_curve(y_label, y_scores_label)
-            auc_val = roc_auc_score(y_label, y_scores_label)
-            opt_idx = np.argmin(np.sqrt((1 - tpr) ** 2 + fpr ** 2))
-            self.opt_threshold_label = thresholds[opt_idx]
-            
-            print(f"Label Model Metrics:\n  K-Fold Accuracy: {label_scores.mean():.4f}\n  Precision: {precision_label:.4f}\n  Recall: {recall_label:.4f}\n  F1 Score: {f1_label:.4f}\n  ROC AUC: {auc_val:.4f}\n  Optimal Threshold: {self.opt_threshold_label:.4f}")
+            # Evaluate on validation set and compute optimal threshold for Label Model
+            y_val_scores_label = label_model.predict_proba(X_val)[:, 1]
+            fpr, tpr, thresholds = roc_curve(y_val_label, y_val_scores_label)
+            auc_val_label = roc_auc_score(y_val_label, y_val_scores_label)
+            opt_idx_label = np.argmax(tpr - fpr)  # Youden's J statistic for optimal threshold
+            self.opt_threshold_label = thresholds[opt_idx_label]
+            print(f"Label Model ROC AUC: {auc_val_label:.4f}, Optimal Threshold: {self.opt_threshold_label:.4f}")
+
+            # Save Label Model
+            label_model_path = os.path.join(self.sModelOutputDir, "label_model.joblib")
+            joblib.dump(label_model, label_model_path)
+            self.sLabelModelPath = label_model_path
+            self.labelModelInput.delete(0, tk.END)
+            self.labelModelInput.insert(0, label_model_path)
 
             # Train and evaluate Defense Evasion Model
             defense_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            defense_scores = cross_val_score(defense_model, X_selected_df, y_defense, cv=skf)
-            defense_model.fit(X_selected_df, y_defense)
-            joblib.dump(defense_model, os.path.join(self.sModelOutputDir, "defense_evasion_model.joblib"))
-            self.sTacticModelPath = os.path.join(self.sModelOutputDir, "defense_evasion_model.joblib")
+            defense_scores = cross_val_score(defense_model, X_train, y_defense.iloc[y_train_label.index], cv=skf)
+            defense_model.fit(X_train, y_defense.iloc[y_train_label.index])
 
-            # Calculate additional metrics for Defense Evasion Model
-            y_pred_defense = defense_model.predict(X_selected_df)
-            precision_defense = precision_score(y_defense, y_pred_defense)
-            recall_defense = recall_score(y_defense, y_pred_defense)
-            f1_defense = f1_score(y_defense, y_pred_defense)
+            # Evaluate on validation set and compute optimal threshold for Defense Evasion Model
+            y_val_scores_defense = defense_model.predict_proba(X_val)[:, 1]
+            fpr, tpr, thresholds = roc_curve(y_val_label, y_val_scores_defense)
+            auc_val_defense = roc_auc_score(y_val_label, y_val_scores_defense)
+            opt_idx_defense = np.argmax(tpr - fpr)
+            self.opt_threshold_defense = thresholds[opt_idx_defense]
+            print(f"Defense Evasion Model ROC AUC: {auc_val_defense:.4f}, Optimal Threshold: {self.opt_threshold_defense:.4f}")
 
-            # ROC AUC and optimal threshold for Defense Evasion Model
-            y_scores_defense = defense_model.predict_proba(X_selected_df)[:, 1]
-            fpr, tpr, thresholds = roc_curve(y_defense, y_scores_defense)
-            auc_val_defense = roc_auc_score(y_defense, y_scores_defense)
-            opt_idx = np.argmin(np.sqrt((1 - tpr) ** 2 + fpr ** 2))
-            self.opt_threshold_defense = thresholds[opt_idx]
-            
-            print(f"Defense Evasion Model Metrics:\n  K-Fold Accuracy: {defense_scores.mean():.4f}\n  Precision: {precision_defense:.4f}\n  Recall: {recall_defense:.4f}\n  F1 Score: {f1_defense:.4f}\n  ROC AUC: {auc_val_defense:.4f}\n  Optimal Threshold: {self.opt_threshold_defense:.4f}")
+            # Save Defense Evasion Model
+            defense_model_path = os.path.join(self.sModelOutputDir, "defense_evasion_model.joblib")
+            joblib.dump(defense_model, defense_model_path)
+            self.sTacticModelPath = defense_model_path
+            self.tacticModelInput.delete(0, tk.END)
+            self.tacticModelInput.insert(0, defense_model_path)
 
             # Train and evaluate Persistence Model
             persistence_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            persistence_scores = cross_val_score(persistence_model, X_selected_df, y_persistence, cv=skf)
-            persistence_model.fit(X_selected_df, y_persistence)
-            joblib.dump(persistence_model, os.path.join(self.sModelOutputDir, "persistence_model.joblib"))
-            self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
+            persistence_scores = cross_val_score(persistence_model, X_train, y_persistence.iloc[y_train_label.index], cv=skf)
+            persistence_model.fit(X_train, y_persistence.iloc[y_train_label.index])
 
-            # Calculate additional metrics for Persistence Model
-            y_pred_persistence = persistence_model.predict(X_selected_df)
-            precision_persistence = precision_score(y_persistence, y_pred_persistence)
-            recall_persistence = recall_score(y_persistence, y_pred_persistence)
-            f1_persistence = f1_score(y_persistence, y_pred_persistence)
+            # Evaluate on validation set and compute optimal threshold for Persistence Model
+            y_val_scores_persistence = persistence_model.predict_proba(X_val)[:, 1]
+            fpr, tpr, thresholds = roc_curve(y_val_label, y_val_scores_persistence)
+            auc_val_persistence = roc_auc_score(y_val_label, y_val_scores_persistence)
+            opt_idx_persistence = np.argmax(tpr - fpr)
+            self.opt_threshold_persistence = thresholds[opt_idx_persistence]
+            print(f"Persistence Model ROC AUC: {auc_val_persistence:.4f}, Optimal Threshold: {self.opt_threshold_persistence:.4f}")
 
-            # ROC AUC and optimal threshold for Persistence Model
-            y_scores_persistence = persistence_model.predict_proba(X_selected_df)[:, 1]
-            fpr, tpr, thresholds = roc_curve(y_persistence, y_scores_persistence)
-            auc_val_persistence = roc_auc_score(y_persistence, y_scores_persistence)
-            opt_idx = np.argmin(np.sqrt((1 - tpr) ** 2 + fpr ** 2))
-            self.opt_threshold_persistence = thresholds[opt_idx]
-            
-            print(f"Persistence Model Metrics:\n  K-Fold Accuracy: {persistence_scores.mean():.4f}\n  Precision: {precision_persistence:.4f}\n  Recall: {recall_persistence:.4f}\n  F1 Score: {f1_persistence:.4f}\n  ROC AUC: {auc_val_persistence:.4f}\n  Optimal Threshold: {self.opt_threshold_persistence:.4f}")
+            # Save Persistence Model
+            persistence_model_path = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
+            joblib.dump(persistence_model, persistence_model_path)
+            self.sPersistenceModelPath = persistence_model_path
+            self.persistenceModelInput.delete(0, tk.END)
+            self.persistenceModelInput.insert(0, persistence_model_path)
 
-            # Display metrics in GUI
+            # Display metrics
             metrics = {
-                "Label Model K-Fold Accuracy": f"{label_scores.mean():.4f}",
-                "Label Model Precision": f"{precision_label:.4f}",
-                "Label Model Recall": f"{recall_label:.4f}",
-                "Label Model F1 Score": f"{f1_label:.4f}",
-                "Label Model ROC AUC": f"{auc_val:.4f}",
-                "Defense Evasion Model K-Fold Accuracy": f"{defense_scores.mean():.4f}",
-                "Defense Evasion Model Precision": f"{precision_defense:.4f}",
-                "Defense Evasion Model Recall": f"{recall_defense:.4f}",
-                "Defense Evasion Model F1 Score": f"{f1_defense:.4f}",
+                "Label Model K-Fold Accuracy": f"{float(label_scores.mean()):.4f}",
+                "Defense Evasion Model K-Fold Accuracy": f"{float(defense_scores.mean()):.4f}",
+                "Persistence Model K-Fold Accuracy": f"{float(persistence_scores.mean()):.4f}",
+                "Label Model ROC AUC": f"{auc_val_label:.4f}",
                 "Defense Evasion Model ROC AUC": f"{auc_val_defense:.4f}",
-                "Persistence Model K-Fold Accuracy": f"{persistence_scores.mean():.4f}",
-                "Persistence Model Precision": f"{precision_persistence:.4f}",
-                "Persistence Model Recall": f"{recall_persistence:.4f}",
-                "Persistence Model F1 Score": f"{f1_persistence:.4f}",
-                "Persistence Model ROC AUC": f"{auc_val_persistence:.4f}"
+                "Persistence Model ROC AUC": f"{auc_val_persistence:.4f}",
+                "Optimal Threshold (Label)": f"{self.opt_threshold_label:.4f}",
+                "Optimal Threshold (Defense Evasion)": f"{self.opt_threshold_defense:.4f}",
+                "Optimal Threshold (Persistence)": f"{self.opt_threshold_persistence:.4f}"
             }
             self.updateMetricsDisplay(metrics)
 
         except Exception as e:
             raise RuntimeError(f"Training error: {e}")
+
+    def compute_metrics(self, y_true, y_pred, y_scores):
+        metrics = {
+            "Accuracy": accuracy_score(y_true, y_pred),
+            "Precision": precision_score(y_true, y_pred),
+            "Recall": recall_score(y_true, y_pred),
+            "F1 Score": f1_score(y_true, y_pred),
+            "ROC AUC": roc_auc_score(y_true, y_scores),
+            "False Positive Rate": 1 - precision_score(y_true, y_pred),
+            "True Positive Rate": recall_score(y_true, y_pred),
+        }
+        return metrics
 
     def classifyCsv(self, csv_path):
         try:
@@ -529,18 +533,21 @@ class MILOTIC:
             raise RuntimeError(f"Classification error: {e}")
 
     def updateMetricsDisplay(self, metrics):
-        try:
-            # Clear the existing metrics list
-            for item in self.metricsList.get_children():
-                self.metricsList.delete(item)
-
-            # Insert the new metrics into the list
-            for metric, value in metrics.items():
-                self.metricsList.insert("", "end", values=(metric, value))
-
-            print("Metrics display updated successfully.")
-        except Exception as e:
-            print(f"Error updating metrics display: {e}")
+        self.metricsList.delete(*self.metricsList.get_children())
+        for metric, value in metrics.items():
+            if isinstance(value, dict):
+                for sub_metric, sub_value in value.items():
+                    try:
+                        formatted_value = f"{float(sub_value):.4f}"
+                    except (ValueError, TypeError):
+                        formatted_value = str(sub_value)
+                    self.metricsList.insert("", "end", values=(f"{metric} - {sub_metric}", formatted_value))
+            else:
+                try:
+                    formatted_value = f"{float(value):.4f}"
+                except (ValueError, TypeError):
+                    formatted_value = str(value)
+                self.metricsList.insert("", "end", values=(metric, formatted_value))
 
 if __name__ == "__main__":
     root = tk.Tk()
