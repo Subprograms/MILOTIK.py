@@ -3,7 +3,9 @@ import tkinter as tk
 import pandas as pd
 import numpy as np
 import joblib
+import re
 
+from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk, messagebox
 from regipy import RegistryHive
 from datetime import datetime
@@ -124,10 +126,6 @@ class MILOTIC:
         messagebox.showinfo("Path Set", f"Tactic model set to: {self.sTacticModelPath}")
 
     def makeDataset(self):
-        """
-        Parse the registry, apply labels, preprocess the data, and save or append the dataset.
-        Ensures the same CSV is used for both preprocessed and training data.
-        """
         try:
             if not os.path.exists(self.sHivePath):
                 raise FileNotFoundError("Hive path not found.")
@@ -187,32 +185,59 @@ class MILOTIC:
             messagebox.showerror("Error", f"Error in ML process: {e}")
 
     def parseRegistry(self, sHivePath):
+        xData = []
+        subkey_counts = {}
+
         try:
-            xData = []
-            subkey_counts = {}
-            xHive = RegistryHive(sHivePath)
-            for xSubkey in xHive.recurse_subkeys():
-                sKeyPath = xSubkey.path
-                parent_path = '\\'.join(sKeyPath.split('\\')[:-1])
-                subkey_counts[parent_path] = subkey_counts.get(parent_path, 0) + 1
-                nDepth = sKeyPath.count('\\')
-                nKeySize = len(sKeyPath.encode('utf-8'))
-                nValueCount = len(xSubkey.values)
-                nSubkeyCount = subkey_counts.get(sKeyPath, 0)
-                for xValue in xSubkey.values:
-                    xData.append({
-                        "Key": sKeyPath,
-                        "Depth": nDepth,
-                        "Key Size": nKeySize,
-                        "Subkey Count": nSubkeyCount,
-                        "Value Count": nValueCount,
-                        "Name": xValue.name,
-                        "Value": str(xValue.value),
-                        "Type": xValue.value_type
-                    })
+            with ThreadPoolExecutor() as executor:
+                xHive = RegistryHive(sHivePath)
+
+                for xSubkey in xHive.recurse_subkeys():
+                    sKeyPath = xSubkey.path
+                    parent_path = '\\'.join(sKeyPath.split('\\')[:-1])
+                    if parent_path in subkey_counts:
+                        subkey_counts[parent_path] += 1
+                    else:
+                        subkey_counts[parent_path] = 1
+
+                    nDepth = sKeyPath.count('\\')
+                    nKeySize = len(sKeyPath.encode('utf-8'))
+                    nValueCount = len(xSubkey.values)
+                    nSubkeyCount = subkey_counts.get(sKeyPath, 0)
+
+                    for xValue in xSubkey.values:
+                        xData.append({
+                            "Key": sKeyPath,
+                            "Depth": nDepth,
+                            "Key Size": nKeySize,
+                            "Subkey Count": nSubkeyCount,
+                            "Value Count": nValueCount,
+                            "Name": xValue.name,
+                            "Value": str(xValue.value),
+                            "Type": xValue.value_type
+                        })
+            
+            # Export the parsed data
+            self.exportToCSV(xData, 'raw')
+            
+            # Preprocess and labelling of the data will utilize the returned dataframe
             return pd.DataFrame(xData)
+
         except Exception as e:
-            raise RuntimeError(f"Failed to parse registry: {e}")
+            messagebox.showerror("Error", f"Error parsing hive: {e}")
+        return xData
+
+    def exportToCSV(self, xData, sPrefix):
+        columns = ["Key", "Name", "Value", "Type", "Subkey Count", "Value Count", "Key Size", "Depth"]
+        xDf = pd.DataFrame(xData, columns=columns)
+
+        xDf.dropna(axis=1, how='all', inplace=True)
+
+        sTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        sOutputCsv = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{sPrefix}_{sTimestamp}.csv")
+        
+        xDf.to_csv(sOutputCsv, index=False)
+        messagebox.showinfo("Export Complete", f"Data exported to: {sOutputCsv}")
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, sAppendPath: str) -> None:
         try:
@@ -323,36 +348,88 @@ class MILOTIC:
             if any(keyword in key_name for keyword in keywords):
                 return category
         return "Other Keys"
-
+            
     def applyLabels(self, df):
         try:
             if 'Key' not in df.columns:
                 raise KeyError("The 'Key' column is missing from the DataFrame.")
 
+            # Load malicious entries with attributes
+            malicious_entries = []
             if os.path.exists(self.sMaliciousKeysPath):
-                with open(self.sMaliciousKeysPath, 'r') as f:
-                    malicious_keys = set(f.read().splitlines())
-            else:
-                malicious_keys = set()
+                with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        parts = [p.strip() for p in re.split(r'[,\|;]', line.strip()) if p.strip()]
+                        entry = {
+                            "Key": parts[0].replace('\\\\', '\\'),  # Replace double backslashes in Key
+                            "Name": parts[1] if len(parts) > 1 and parts[1].lower() != "none" else None,
+                            "Value": parts[2].replace('\\\\', '\\') if len(parts) > 2 and parts[2].lower() != "none" else None,
+                            "Type": parts[3] if len(parts) > 3 and parts[3].lower() != "none" else None
+                        }
+                        malicious_entries.append(entry)
 
+            print("Loaded malicious entries:", malicious_entries)  # Debug log
+
+            # Load tagged entries with attributes and tactics
+            tagged_entries = []
             if os.path.exists(self.sTaggedKeysPath):
-                with open(self.sTaggedKeysPath, 'r') as f:
-                    tagged_keys = {line.split('[')[0].strip(): line.split('[')[1].strip(']') for line in f if '[' in line}
-            else:
-                tagged_keys = {}
+                with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        parts = [p.strip() for p in re.split(r'[,\|;]', line.strip()) if p.strip()]
+                        entry = {
+                            "Key": parts[0].replace('\\\\', '\\'),  # Replace double backslashes in Key
+                            "Name": parts[1] if len(parts) > 1 and parts[1].lower() != "none" else None,
+                            "Value": parts[2].replace('\\\\', '\\') if len(parts) > 2 and parts[2].lower() != "none" else None,
+                            "Type": parts[3] if len(parts) > 3 and parts[3].lower() != "none" else None,
+                            "Tactic": parts[4] if len(parts) > 4 else "Persistence"
+                        }
+                        tagged_entries.append(entry)
 
-            if not malicious_keys:
-                print("No malicious keys provided. Randomly labeling entries.")
-                df['Label'] = np.random.choice(['Benign', 'Malicious'], size=len(df))
-            else:
-                df['Label'] = df['Key'].apply(lambda x: 'Malicious' if x in malicious_keys else 'Benign')
+            print("Loaded tagged entries:", tagged_entries)  # Debug log
 
-            if not tagged_keys:
-                print("No tagged keys provided. Assigning random tactics.")
-                possible_tactics = ['Persistence', 'Execution', 'Privilege Escalation', 'Defense Evasion']
-                df['Tactic'] = np.random.choice(possible_tactics, size=len(df))
-            else:
-                df['Tactic'] = df.apply(lambda row: tagged_keys.get(row['Key'], 'Persistence') if row['Label'] == 'Malicious' else 'None', axis=1)
+            # Function to check if a row matches any malicious entry
+            def is_malicious(row):
+                row_key = row['Key']
+                row_name = row.get('Name', '')
+                row_value = str(row.get('Value', ''))
+                row_type = row.get('Type', '')
+
+                for entry in malicious_entries:
+                    if row_key != entry['Key']:
+                        continue
+                    if entry['Name'] is not None and row_name != entry['Name']:
+                        continue
+                    if entry['Value'] is not None and row_value != entry['Value']:
+                        continue
+                    if entry['Type'] is not None and row_type != entry['Type']:
+                        continue
+                    print(f"Matched malicious entry: {row_key}")  # Debug log
+                    return 'Malicious'
+                return 'Benign'
+
+            # Function to assign a tactic based on any tagged entry
+            def assign_tactic(row):
+                row_key = row['Key']
+                row_name = row.get('Name', '')
+                row_value = str(row.get('Value', ''))
+                row_type = row.get('Type', '')
+
+                for entry in tagged_entries:
+                    if row_key != entry['Key']:
+                        continue
+                    if entry['Name'] is not None and row_name != entry['Name']:
+                        continue
+                    if entry['Value'] is not None and row_value != entry['Value']:
+                        continue
+                    if entry['Type'] is not None and row_type != entry['Type']:
+                        continue
+                    print(f"Matched tagged entry: {row_key} with tactic: {entry['Tactic']}")  # Debug log
+                    return entry['Tactic']
+                return 'None'
+
+            # Apply the labeling and tactic assignment functions
+            df['Label'] = df.apply(is_malicious, axis=1)
+            df['Tactic'] = df.apply(assign_tactic, axis=1)
 
             return df
 
