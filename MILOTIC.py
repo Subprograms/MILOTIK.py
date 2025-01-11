@@ -348,7 +348,7 @@ class MILOTIC:
             if any(keyword in key_name for keyword in keywords):
                 return category
         return "Other Keys"
-            
+        
     def applyLabels(self, df):
         try:
             if 'Key' not in df.columns:
@@ -359,12 +359,12 @@ class MILOTIC:
             if os.path.exists(self.sMaliciousKeysPath):
                 with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
                     for line in f:
-                        parts = [p.strip() for p in re.split(r'[,\|;]', line.strip()) if p.strip()]
+                        parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
                         entry = {
-                            "Key": parts[0].replace('\\\\', '\\'),  # Replace double backslashes in Key
-                            "Name": parts[1] if len(parts) > 1 and parts[1].lower() != "none" else None,
-                            "Value": parts[2].replace('\\\\', '\\') if len(parts) > 2 and parts[2].lower() != "none" else None,
-                            "Type": parts[3] if len(parts) > 3 and parts[3].lower() != "none" else None
+                            "Key": re.sub(r'\\+', r'\\', parts[0].strip()),
+                            "Name": parts[1].strip() if len(parts) > 1 and parts[1].lower() != "none" else None,
+                            "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts) > 2 and parts[2].lower() != "none" else None,
+                            "Type": parts[3].strip() if len(parts) > 3 and parts[3].lower() != "none" else None
                         }
                         malicious_entries.append(entry)
 
@@ -375,13 +375,13 @@ class MILOTIC:
             if os.path.exists(self.sTaggedKeysPath):
                 with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
                     for line in f:
-                        parts = [p.strip() for p in re.split(r'[,\|;]', line.strip()) if p.strip()]
+                        parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
                         entry = {
-                            "Key": parts[0].replace('\\\\', '\\'),  # Replace double backslashes in Key
-                            "Name": parts[1] if len(parts) > 1 and parts[1].lower() != "none" else None,
-                            "Value": parts[2].replace('\\\\', '\\') if len(parts) > 2 and parts[2].lower() != "none" else None,
-                            "Type": parts[3] if len(parts) > 3 and parts[3].lower() != "none" else None,
-                            "Tactic": parts[4] if len(parts) > 4 else "Persistence"
+                            "Key": re.sub(r'\\+', r'\\', parts[0].strip()),
+                            "Name": parts[1].strip() if len(parts) > 1 and parts[1].lower() != "none" else None,
+                            "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts) > 2 and parts[2].lower() != "none" else None,
+                            "Type": parts[3].strip() if len(parts) > 3 and parts[3].lower() != "none" else None,
+                            "Tactic": parts[4].strip() if len(parts) > 4 else "Persistence"
                         }
                         tagged_entries.append(entry)
 
@@ -389,20 +389,27 @@ class MILOTIC:
 
             # Function to check if a row matches any malicious entry
             def is_malicious(row):
-                row_key = row['Key']
-                row_name = row.get('Name', '')
-                row_value = str(row.get('Value', ''))
-                row_type = row.get('Type', '')
+                row_key = re.sub(r'\\+', r'\\', str(row.get('Key', '') or '').strip().lower())
+                row_name = str(row.get('Name', '') or '').strip().lower()
+                row_value = re.sub(r'\\+', r'\\', str(row.get('Value', '') or '').strip().lower())
+                row_type = str(row.get('Type', '') or '').strip().lower()
 
                 for entry in malicious_entries:
-                    # Check only non-None attributes
-                    if entry['Key'] and row_key != entry['Key']:
+                    entry_key_last = entry['Key'].strip().split('\\')[-1].lower()
+                    row_key_last = row_key.split('\\')[-1]
+
+                    entry_name = entry['Name'].strip().lower() if entry['Name'] else None
+                    entry_value = entry['Value'].strip().lower() if entry['Value'] else None
+                    entry_type = entry['Type'].strip().lower() if entry['Type'] else None
+
+                    # Check only non-None attributes and if the last part of the path matches
+                    if row_key_last != entry_key_last:
                         continue
-                    if entry['Name'] and row_name != entry['Name']:
+                    if entry_name and row_name != entry_name:
                         continue
-                    if entry['Value'] and row_value != entry['Value']:
+                    if entry_value and row_value != entry_value:
                         continue
-                    if entry['Type'] and row_type != entry['Type']:
+                    if entry_type and row_type != entry_type:
                         continue
                     print(f"Matched malicious entry: {row_key}")  # Debug log
                     return 'Malicious'
@@ -410,20 +417,27 @@ class MILOTIC:
 
             # Function to assign a tactic based on any tagged entry
             def assign_tactic(row):
-                row_key = row['Key']
-                row_name = row.get('Name', '')
-                row_value = str(row.get('Value', ''))
-                row_type = row.get('Type', '')
+                row_key = re.sub(r'\\+', r'\\', str(row.get('Key', '') or '').strip().lower())
+                row_name = str(row.get('Name', '') or '').strip().lower()
+                row_value = re.sub(r'\\+', r'\\', str(row.get('Value', '') or '').strip().lower())
+                row_type = str(row.get('Type', '') or '').strip().lower()
 
                 for entry in tagged_entries:
-                    # Check only non-None attributes
-                    if entry['Key'] and row_key != entry['Key']:
+                    entry_key_last = entry['Key'].strip().split('\\')[-1].lower()
+                    row_key_last = row_key.split('\\')[-1]
+
+                    entry_name = entry['Name'].strip().lower() if entry['Name'] else None
+                    entry_value = entry['Value'].strip().lower() if entry['Value'] else None
+                    entry_type = entry['Type'].strip().lower() if entry['Type'] else None
+
+                    # Check only non-None attributes and if the last part of the path matches
+                    if row_key_last != entry_key_last:
                         continue
-                    if entry['Name'] and row_name != entry['Name']:
+                    if entry_name and row_name != entry_name:
                         continue
-                    if entry['Value'] and row_value != entry['Value']:
+                    if entry_value and row_value != entry_value:
                         continue
-                    if entry['Type'] and row_type != entry['Type']:
+                    if entry_type and row_type != entry_type:
                         continue
                     print(f"Matched tagged entry: {row_key} with tactic: {entry['Tactic']}")  # Debug log
                     return entry['Tactic']
