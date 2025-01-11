@@ -395,13 +395,14 @@ class MILOTIC:
                 row_type = row.get('Type', '')
 
                 for entry in malicious_entries:
-                    if row_key != entry['Key']:
+                    # Check only non-None attributes
+                    if entry['Key'] and row_key != entry['Key']:
                         continue
-                    if entry['Name'] is not None and row_name != entry['Name']:
+                    if entry['Name'] and row_name != entry['Name']:
                         continue
-                    if entry['Value'] is not None and row_value != entry['Value']:
+                    if entry['Value'] and row_value != entry['Value']:
                         continue
-                    if entry['Type'] is not None and row_type != entry['Type']:
+                    if entry['Type'] and row_type != entry['Type']:
                         continue
                     print(f"Matched malicious entry: {row_key}")  # Debug log
                     return 'Malicious'
@@ -415,13 +416,14 @@ class MILOTIC:
                 row_type = row.get('Type', '')
 
                 for entry in tagged_entries:
-                    if row_key != entry['Key']:
+                    # Check only non-None attributes
+                    if entry['Key'] and row_key != entry['Key']:
                         continue
-                    if entry['Name'] is not None and row_name != entry['Name']:
+                    if entry['Name'] and row_name != entry['Name']:
                         continue
-                    if entry['Value'] is not None and row_value != entry['Value']:
+                    if entry['Value'] and row_value != entry['Value']:
                         continue
-                    if entry['Type'] is not None and row_type != entry['Type']:
+                    if entry['Type'] and row_type != entry['Type']:
                         continue
                     print(f"Matched tagged entry: {row_key} with tactic: {entry['Tactic']}")  # Debug log
                     return entry['Tactic']
