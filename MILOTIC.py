@@ -160,30 +160,6 @@ class MILOTIC:
             print(f"Error in makeDataset: {e}")
             messagebox.showerror("Error", f"Failed to make dataset: {e}")
 
-    def executeMLProcess(self):
-        try:
-            if not self.sClassifyCsvPath:
-                print("No CSV to classify provided. Generating one using the training dataset...")
-                df = pd.read_csv(self.sTrainingDatasetPath)
-                self.sClassifyCsvPath = os.path.join(self.sModelOutputDir, "generated_classify.csv")
-                df.drop(columns=['Label', 'Tactic'], errors='ignore').to_csv(self.sClassifyCsvPath, index=False)
-
-            print("Loading training dataset...")
-            df = pd.read_csv(self.sTrainingDatasetPath)
-
-            if not self.sLabelModelPath or not os.path.exists(self.sLabelModelPath):
-                print("No existing Label Model found. Training a new Label Model...")
-            if not self.sTacticModelPath or not os.path.exists(self.sTacticModelPath):
-                print("No existing Tactic Model found. Training a new Tactic Model...")
-
-            self.trainAndEvaluateModels(df)
-            print("Classifying the provided CSV...")
-            self.classifyCsv(self.sClassifyCsvPath)
-
-            messagebox.showinfo("ML Process Complete", "The ML process has successfully finished!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Error in ML process: {e}")
-
     def parseRegistry(self, sHivePath):
         xData = []
         subkey_counts = {}
@@ -331,10 +307,8 @@ class MILOTIC:
     def preprocessValue(self, value):
         if isinstance(value, str):
             return len(value)
-        elif isinstance(value, (int, float)):
-            return value
         else:
-            return 0
+            return value
 
     def categorizeKeyName(self, key_name):
         key_name_categories = {
@@ -359,7 +333,7 @@ class MILOTIC:
             if os.path.exists(self.sMaliciousKeysPath):
                 with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
                     for line in f:
-                        parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
+                        parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
                         entry = {
                             "Key": re.sub(r'\\+', r'\\', parts[0].strip()),
                             "Name": parts[1].strip() if len(parts) > 1 and parts[1].lower() != "none" else None,
