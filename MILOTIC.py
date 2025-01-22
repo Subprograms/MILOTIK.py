@@ -479,11 +479,27 @@ class MILOTIC:
             X_train, X_temp, y_train_label, y_temp_label = train_test_split(X_selected_df, y_label, test_size=0.3, random_state=42)
             X_val, X_test, y_val_label, y_test_label = train_test_split(X_temp, y_temp_label, test_size=0.5, random_state=42)
 
+            # Function to perform Grid Search
+            def grid_search_random_forest(X, y):
+                param_grid = {
+                    'n_estimators': [50, 100, 200],
+                    'max_depth': [None, 10, 20, 30],
+                    'min_samples_split': [2, 5, 10],
+                    'min_samples_leaf': [1, 2, 4],
+                    'bootstrap': [True, False]
+                }
+                rf = RandomForestClassifier(random_state=42)
+                grid_search = GridSearchCV(estimator=rf, param_grid=param_grid, cv=5, scoring='roc_auc', n_jobs=-1, verbose=2)
+                grid_search.fit(X, y)
+                print(f"Best parameters: {grid_search.best_params_}")
+                print(f"Best ROC AUC: {grid_search.best_score_:.4f}")
+                return grid_search.best_estimator_
+
             skf = StratifiedKFold(n_splits=10)
 
-            # Train and evaluate Label Model using K-Fold cross-validation
-            label_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            label_scores = cross_val_score(label_model, X_train, y_train_label, cv=skf)
+            # Train and evaluate Label Model
+            print("Training Label Model with Grid Search...")
+            label_model = grid_search_random_forest(X_train, y_train_label)
             label_model.fit(X_train, y_train_label)
 
             # Evaluate on validation set and compute optimal threshold for Label Model
@@ -502,8 +518,8 @@ class MILOTIC:
             self.labelModelInput.insert(0, label_model_path)
 
             # Train and evaluate Defense Evasion Model
-            defense_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            defense_scores = cross_val_score(defense_model, X_train, y_defense.iloc[y_train_label.index], cv=skf)
+            print("Training Defense Evasion Model with Grid Search...")
+            defense_model = grid_search_random_forest(X_train, y_defense.iloc[y_train_label.index])
             defense_model.fit(X_train, y_defense.iloc[y_train_label.index])
 
             # Evaluate on validation set and compute optimal threshold for Defense Evasion Model
@@ -522,8 +538,8 @@ class MILOTIC:
             self.tacticModelInput.insert(0, defense_model_path)
 
             # Train and evaluate Persistence Model
-            persistence_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            persistence_scores = cross_val_score(persistence_model, X_train, y_persistence.iloc[y_train_label.index], cv=skf)
+            print("Training Persistence Model with Grid Search...")
+            persistence_model = grid_search_random_forest(X_train, y_persistence.iloc[y_train_label.index])
             persistence_model.fit(X_train, y_persistence.iloc[y_train_label.index])
 
             # Evaluate on validation set and compute optimal threshold for Persistence Model
@@ -543,9 +559,6 @@ class MILOTIC:
 
             # Display metrics
             metrics = {
-                "Label Model K-Fold Accuracy": f"{float(label_scores.mean()):.4f}",
-                "Defense Evasion Model K-Fold Accuracy": f"{float(defense_scores.mean()):.4f}",
-                "Persistence Model K-Fold Accuracy": f"{float(persistence_scores.mean()):.4f}",
                 "Label Model ROC AUC": f"{auc_val_label:.4f}",
                 "Defense Evasion Model ROC AUC": f"{auc_val_defense:.4f}",
                 "Persistence Model ROC AUC": f"{auc_val_persistence:.4f}",
