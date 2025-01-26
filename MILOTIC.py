@@ -539,7 +539,7 @@ class MILOTIC:
                     'min_samples_leaf': [1, 2],
                     'bootstrap': [True, False]
                 }
-                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
                 model = RandomForestClassifier(random_state=42)
                 gs = GridSearchCV(model, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1, verbose=1)
                 gs.fit(Xp, yp)
