@@ -535,7 +535,7 @@ class MILOTIC:
                 param_grid = {
                     'n_estimators': [50, 100],
                     'max_depth': [None, 10],
-                    'min_samples_split': [2, 5],
+                    'min_samples_split': [2, 10],
                     'min_samples_leaf': [1, 2],
                     'bootstrap': [True, False]
                 }
