@@ -21,13 +21,14 @@ from sklearn.metrics import (
 )
 from sklearn.feature_selection import RFE
 
+
 class MILOTIC:
     def __init__(self, root):
         self.root = root
         self.root.title("MILOTIC")
         self.root.geometry("750x700")
 
-        # User-defined paths
+        # User-provided paths
         self.sHivePath = ''
         self.sMaliciousKeysPath = ''
         self.sTaggedKeysPath = ''
@@ -45,7 +46,7 @@ class MILOTIC:
         self.setupUI()
 
     ###########################################################################
-    #                          GUI SETUP
+    #                           GUI Setup
     ###########################################################################
     def setupUI(self):
         frame = ttk.Frame(self.root)
@@ -118,7 +119,7 @@ class MILOTIC:
         self.metricsList.grid(row=11, column=0, columnspan=3, pady=10)
 
     ###########################################################################
-    #                          SETTERS
+    #                            Path Setters
     ###########################################################################
     def setHivePath(self):
         self.sHivePath = self.hivePathInput.get().strip()
@@ -157,14 +158,15 @@ class MILOTIC:
         messagebox.showinfo("Path Set", f"Persistence model set to: {self.sPersistenceModelPath}")
 
     ###########################################################################
-    #                       MAKE DATASET
+    #                          MAKE DATASET
     ###########################################################################
     def parseRegistry(self, hive_path):
-        """Return a raw DataFrame with 'Key','Depth', 'Name','Value','Type', etc."""
+        """
+        Parse the registry hive into raw columns: 'Key','Depth', 'Name','Value','Type', etc.
+        """
         from regipy import RegistryHive
         xData = []
         subkey_counts = {}
-
         try:
             with ThreadPoolExecutor() as executor:
                 hive = RegistryHive(hive_path)
@@ -173,18 +175,18 @@ class MILOTIC:
                     parent_path = '\\'.join(sKeyPath.split('\\')[:-1])
                     subkey_counts[parent_path] = subkey_counts.get(parent_path, 0) + 1
 
-                    depth = sKeyPath.count('\\')
-                    keysize = len(sKeyPath.encode('utf-8'))
-                    valcount = len(subkey.values)
-                    subcount = subkey_counts.get(sKeyPath, 0)
+                    d = sKeyPath.count('\\')
+                    ksz = len(sKeyPath.encode('utf-8'))
+                    vcount = len(subkey.values)
+                    scount = subkey_counts.get(sKeyPath, 0)
 
                     for val in subkey.values:
                         xData.append({
                             "Key": sKeyPath,
-                            "Depth": depth,
-                            "Key Size": keysize,
-                            "Subkey Count": subcount,
-                            "Value Count": valcount,
+                            "Depth": d,
+                            "Key Size": ksz,
+                            "Subkey Count": scount,
+                            "Value Count": vcount,
                             "Name": val.name,
                             "Value": str(val.value),
                             "Type": val.value_type
@@ -196,9 +198,9 @@ class MILOTIC:
 
     def makeDataset(self):
         """
-        1. parseRegistry + applyLabels => raw-labeled data
-        2. append or create raw_parsed CSV
-        3. Optionally preprocess => training dataset (but no RFE here)
+        1) parse + label => raw-labeled
+        2) save/append raw-labeled => rawParsed
+        3) preprocess => keep only Key + preprocessed columns + Label + Tactic => fillna(0) => training CSV
         """
         try:
             if not os.path.exists(self.sHivePath):
@@ -210,47 +212,76 @@ class MILOTIC:
             print("Applying labels...")
             df_labeled = self.applyLabels(df_raw)
 
-            # Raw-labeled CSV
+            # Save/append raw-labeled
             if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 self.appendToExistingCsv(df_labeled, self.sRawParsedCsvPath)
-                print(f"Appended labeled raw data to existing: {self.sRawParsedCsvPath}")
+                print(f"Appended raw-labeled data to: {self.sRawParsedCsvPath}")
             else:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_raw_file = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
-                df_labeled.to_csv(new_raw_file, index=False)
-                self.sRawParsedCsvPath = new_raw_file
+                new_raw_path = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
+                df_labeled.to_csv(new_raw_path, index=False)
+                self.sRawParsedCsvPath = new_raw_path
                 self.rawParsedCsvInput.delete(0, tk.END)
-                self.rawParsedCsvInput.insert(0, new_raw_file)
-                print(f"Created new raw parsed CSV: {new_raw_file}")
+                self.rawParsedCsvInput.insert(0, new_raw_path)
+                print(f"Created new raw-labeled CSV: {new_raw_path}")
 
-            # If you also want a training dataset with preprocessed data:
-            print("Preprocessing data (no RFE) => training dataset.")
+            # Preprocess => keep only Key + label/tactic + new columns => fillna(0)
+            print("Preprocessing for training dataset (no RFE here)...")
             df_preproc = self.preprocessData(df_labeled)
 
+            # Now define final training columns: keep 'Key','Label','Tactic', plus the new columns
+            # We'll define a function to pick them
+            final_cols = self.selectTrainingColumns(df_preproc)
+            df_preproc = df_preproc[final_cols]
+
+            # Fill all NaN with 0
+            df_preproc.fillna(0, inplace=True)
+
+            # Save or append to training dataset
             if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
                 self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
-                print(f"Appended to existing training dataset: {self.sTrainingDatasetPath}")
+                print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
             else:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_train_file = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
-                df_preproc.to_csv(new_train_file, index=False)
-                self.sTrainingDatasetPath = new_train_file
+                new_train_path = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
+                df_preproc.to_csv(new_train_path, index=False)
+                self.sTrainingDatasetPath = new_train_path
                 self.trainingDatasetInput.delete(0, tk.END)
-                self.trainingDatasetInput.insert(0, new_train_file)
-                print(f"Created new training dataset: {new_train_file}")
-                messagebox.showinfo("Dataset Created", f"New training dataset: {new_train_file}")
+                self.trainingDatasetInput.insert(0, new_train_path)
+                print(f"Created new training dataset: {new_train_path}")
+                messagebox.showinfo("Dataset Created", f"New training dataset: {new_train_path}")
 
         except Exception as e:
             msg = f"Error in makeDataset: {e}"
             print(msg)
             messagebox.showerror("Error", msg)
 
+    def selectTrainingColumns(self, df):
+        """
+        Keep only:
+          - 'Key'
+          - 'Label'
+          - 'Tactic'
+          - numeric columns like: Depth, Key Size, Subkey Count, Value Count, Value Processed
+          - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_
+        """
+        keep_cols = []
+        for c in df.columns:
+            if c == 'Key':
+                keep_cols.append(c)
+            elif c in ('Label','Tactic'):
+                keep_cols.append(c)
+            elif c in ('Depth','Key Size','Subkey Count','Value Count','Value Processed'):
+                keep_cols.append(c)
+            elif c.startswith('PathCategory_') or c.startswith('TypeGroup_') or c.startswith('KeyNameCategory_'):
+                keep_cols.append(c)
+        # Only return columns that actually exist
+        return [col for col in keep_cols if col in df.columns]
+
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
         """
-        Append even if there's a column mismatch, by unifying columns:
-        - We take the union of columns from existing & new
-        - Reindex both to that union
-        - Then concat
+        Append even if columns mismatch, by uniting columns.
+        Then fill columns that don't exist with NaN in each DataFrame.
         """
         try:
             if not csv_path or not os.path.exists(csv_path):
@@ -259,113 +290,103 @@ class MILOTIC:
                 return
 
             existing_df = pd.read_csv(csv_path)
-            # Union columns
+            # union of columns
             all_cols = set(existing_df.columns).union(set(new_df.columns))
-            all_cols = list(all_cols)  # keep as list
+            all_cols = list(all_cols)
 
-            # Reindex both
             existing_df = existing_df.reindex(columns=all_cols)
             new_df = new_df.reindex(columns=all_cols)
 
             combined = pd.concat([existing_df, new_df], ignore_index=True)
             combined.to_csv(csv_path, index=False)
-            print(f"Data appended (columns unified) to existing CSV: {csv_path}")
+            print(f"Data appended (united columns) to existing CSV: {csv_path}")
 
         except Exception as ex:
             print(f"Error appending to CSV ({csv_path}): {ex}")
-            # fallback
             new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
     #                          APPLY LABELS
     ###########################################################################
     def applyLabels(self, df):
-        """Assign 'Label' and 'Tactic', keep 'Key', etc."""
-        try:
-            if 'Key' not in df.columns:
-                raise KeyError("No 'Key' col in DataFrame.")
+        """Add 'Label','Tactic' to raw. Keep 'Key'. """
+        if 'Key' not in df.columns:
+            raise KeyError("No 'Key' column in data for labeling.")
 
-            malicious_entries = []
-            if self.sMaliciousKeysPath and os.path.exists(self.sMaliciousKeysPath):
-                with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
-                        entry = {
-                            "Key": re.sub(r'\\+', r'\\', parts[0]),
-                            "Name": parts[1].strip() if len(parts)>1 else None,
-                            "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                            "Type": parts[3].strip() if len(parts)>3 else None
-                        }
-                        malicious_entries.append(entry)
+        malicious_entries = []
+        if self.sMaliciousKeysPath and os.path.exists(self.sMaliciousKeysPath):
+            with open(self.sMaliciousKeysPath,'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
+                    entry = {
+                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
+                        "Name": parts[1].strip() if len(parts)>1 else None,
+                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
+                        "Type": parts[3].strip() if len(parts)>3 else None
+                    }
+                    malicious_entries.append(entry)
 
-            tagged_entries = []
-            if self.sTaggedKeysPath and os.path.exists(self.sTaggedKeysPath):
-                with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
-                        entry = {
-                            "Key": re.sub(r'\\+', r'\\', parts[0]),
-                            "Name": parts[1].strip() if len(parts)>1 else None,
-                            "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                            "Type": parts[3].strip() if len(parts)>3 else None,
-                            "Tactic": parts[4].strip() if len(parts)>4 else "Persistence"
-                        }
-                        tagged_entries.append(entry)
+        tagged_entries = []
+        if self.sTaggedKeysPath and os.path.exists(self.sTaggedKeysPath):
+            with open(self.sTaggedKeysPath,'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
+                    entry = {
+                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
+                        "Name": parts[1].strip() if len(parts)>1 else None,
+                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
+                        "Type": parts[3].strip() if len(parts)>3 else None,
+                        "Tactic": parts[4].strip() if len(parts)>4 else "Persistence"
+                    }
+                    tagged_entries.append(entry)
 
-            def is_malicious(row):
-                row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-                row_name = str(row['Name']).lower().strip()
-                row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-                row_type = str(row['Type']).lower().strip()
-                for e in malicious_entries:
-                    ekey_last = e['Key'].strip().split('\\')[-1].lower()
-                    row_key_last = row_key.split('\\')[-1]
-                    if row_key_last != ekey_last:
-                        continue
-                    if e['Name'] and row_name != e['Name'].lower():
-                        continue
-                    if e['Value'] and row_value != e['Value'].lower():
-                        continue
-                    if e['Type'] and row_type != e['Type'].lower():
-                        continue
-                    return 'Malicious'
-                return 'Benign'
+        def is_malicious(row):
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
+            row_name = str(row['Name']).lower().strip()
+            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
+            row_type = str(row['Type']).lower().strip()
+            for e in malicious_entries:
+                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
+                row_key_last = row_key.split('\\')[-1]
+                if row_key_last!=ekey_last:
+                    continue
+                if e['Name'] and row_name!=e['Name'].lower():
+                    continue
+                if e['Value'] and row_value!= e['Value'].lower():
+                    continue
+                if e['Type'] and row_type!= e['Type'].lower():
+                    continue
+                return 'Malicious'
+            return 'Benign'
 
-            def assign_tactic(row):
-                row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-                row_name = str(row['Name']).lower().strip()
-                row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-                row_type = str(row['Type']).lower().strip()
+        def assign_tactic(row):
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
+            row_name = str(row['Name']).lower().strip()
+            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
+            row_type = str(row['Type']).lower().strip()
+            for e in tagged_entries:
+                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
+                row_key_last = row_key.split('\\')[-1]
+                if row_key_last!=ekey_last:
+                    continue
+                if e['Name'] and row_name!=e['Name'].lower():
+                    continue
+                if e['Value'] and row_value!= e['Value'].lower():
+                    continue
+                if e['Type'] and row_type!= e['Type'].lower():
+                    continue
+                return e['Tactic']
+            return 'None'
 
-                for e in tagged_entries:
-                    ekey_last = e['Key'].strip().split('\\')[-1].lower()
-                    row_key_last = row_key.split('\\')[-1]
-                    if row_key_last != ekey_last:
-                        continue
-                    if e['Name'] and row_name != e['Name'].lower():
-                        continue
-                    if e['Value'] and row_value != e['Value'].lower():
-                        continue
-                    if e['Type'] and row_type != e['Type'].lower():
-                        continue
-                    return e['Tactic']
-                return 'None'
-
-            df['Label'] = df.apply(is_malicious, axis=1)
-            df['Tactic'] = df.apply(assign_tactic, axis=1)
-            return df
-
-        except Exception as ex:
-            raise RuntimeError(f"Error applying labels: {ex}")
+        df['Label'] = df.apply(is_malicious, axis=1)
+        df['Tactic'] = df.apply(assign_tactic, axis=1)
+        return df
 
     ###########################################################################
-    #                   PREPROCESS (No RFE here)
+    #                         PREPROCESS (NO RFE)
     ###########################################################################
     def preprocessData(self, df):
-        """
-        Keep 'Key' in final. Return a DataFrame with added columns for type, path, etc.
-        No RFE in this step. We'll do that only in trainAndEvaluateModels.
-        """
+        """Scale numeric, get dummies, keep 'Key' etc, do not do RFE here."""
         if df.empty:
             print("No data to preprocess.")
             return pd.DataFrame()
@@ -386,7 +407,7 @@ class MILOTIC:
         type_enc = pd.get_dummies(xDf['Type Group'], prefix='TypeGroup')
         xDf = pd.concat([xDf, type_enc], axis=1)
 
-        # Name cat
+        # Key name cat
         xDf['Key Name Category'] = xDf['Name'].apply(self.categorizeKeyName)
         name_enc = pd.get_dummies(xDf['Key Name Category'], prefix='KeyNameCategory')
         xDf = pd.concat([xDf, name_enc], axis=1)
@@ -395,13 +416,13 @@ class MILOTIC:
         xDf['Value Processed'] = xDf['Value'].apply(self.preprocessValue)
 
         # scale numeric
-        scaler_minmax = MinMaxScaler()
+        minmax = MinMaxScaler()
         minmax_cols = ['Depth','Value Count','Value Processed']
-        xDf[minmax_cols] = scaler_minmax.fit_transform(xDf[minmax_cols])
+        xDf[minmax_cols] = minmax.fit_transform(xDf[minmax_cols])
 
-        scaler_robust = RobustScaler()
+        robust = RobustScaler()
         robust_cols = ['Key Size','Subkey Count']
-        xDf[robust_cols] = scaler_robust.fit_transform(xDf[robust_cols])
+        xDf[robust_cols] = robust.fit_transform(xDf[robust_cols])
 
         return xDf
 
@@ -434,23 +455,23 @@ class MILOTIC:
             "Internet and Network Keys": ["ProxyEnable","ProxyServer"],
             "File Execution Keys": ["ShellExecuteHooks"]
         }
-        for cat,keys in categories.items():
+        for cat, keys in categories.items():
             if any(k in kn for k in keys):
                 return cat
         return "Other Keys"
 
     def preprocessValue(self, v):
-        if isinstance(v, str):
+        if isinstance(v,str):
             return len(v)
         return v
 
     ###########################################################################
-    #                      EXECUTE ML PROCESS
+    #            EXECUTE ML PROCESS (RFE here, not in makeDataset)
     ###########################################################################
     def executeMLProcess(self):
         """
-        If no classify CSV set => use training dataset for classification test.
-        Then train->evaluate->classify. RFE occurs only now, not in makeDataset.
+        If no classify CSV => use training dataset for classification test.
+        Then train->evaluate->classify.
         """
         try:
             if not self.sClassifyCsvPath:
@@ -463,64 +484,58 @@ class MILOTIC:
             print("Classifying the provided CSV...")
             self.classifyCsv(self.sClassifyCsvPath)
 
-            messagebox.showinfo("ML Complete", "Finished training and classification.")
+            messagebox.showinfo("ML Process Complete", "Finished training & classification!")
         except Exception as ex:
             messagebox.showerror("Error", f"Error in ML process: {ex}")
 
     ###########################################################################
-    #            TRAIN & EVALUATE (RFE HAPPENS HERE ONLY)
+    #                TRAIN AND EVALUATE MODELS
     ###########################################################################
     def trainAndEvaluateModels(self, df):
         """
-        3 RandomForest models: Label, Defense Evasion, Persistence
-        If single-class, force 30% to '1'.
-        RFE done here only. Appending or preprocessing doesn't do RFE.
+        3 RandomForest models: label, defense, persistence
+        If single-class => forcibly flip ~30% to class '1' for demonstration
+        RFE is done here only.
         """
         try:
             if df.empty:
-                raise ValueError("Training dataset is empty.")
+                raise ValueError("Training dataset is empty")
 
-            # Drop columns we don't want as features, but keep them in df so 'Key' is visible
+            # Remove columns not used for features
             exclude_cols = []
             for c in ['Key','Name','Value','Label','Tactic','Type','Type Group','Key Name Category','Path Category']:
                 if c in df.columns:
                     exclude_cols.append(c)
-
             X_all = df.drop(columns=exclude_cols, errors='ignore')
 
             if 'Label' not in df.columns or 'Tactic' not in df.columns:
-                raise ValueError("Missing 'Label' or 'Tactic' col in dataset.")
+                raise ValueError("Missing 'Label'/'Tactic' in dataset")
 
-            y_label = (df['Label'] == 'Malicious').astype(int)
-            y_defense = (df['Tactic'] == 'Defense Evasion').astype(int)
-            y_persistence = (df['Tactic'] == 'Persistence').astype(int)
+            y_label = (df['Label']=='Malicious').astype(int)
+            y_defense = (df['Tactic']=='Defense Evasion').astype(int)
+            y_persist = (df['Tactic']=='Persistence').astype(int)
 
-            # Force multi-class
             import numpy as np
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
+            # Force multi-class if single
             if y_label.nunique()<2:
-                flip_n = int(len(y_label)*0.3)
-                idx = np.random.choice(y_label.index, size=flip_n, replace=False)
-                y_label.iloc[idx] = 1
-                print("Forced ~30% malicious in y_label for demonstration.")
-
+                idx = np.random.choice(y_label.index, size=int(len(y_label)*0.3), replace=False)
+                y_label.iloc[idx]=1
+                print("Forced ~30% malicious for label model test.")
             if y_defense.nunique()<2:
-                flip_n = int(len(y_defense)*0.3)
-                idx = np.random.choice(y_defense.index, size=flip_n, replace=False)
-                y_defense.iloc[idx] = 1
-                print("Forced ~30% defense evasion in y_defense for demonstration.")
+                idx = np.random.choice(y_defense.index, size=int(len(y_defense)*0.3), replace=False)
+                y_defense.iloc[idx]=1
+                print("Forced ~30% 'Defense Evasion'.")
+            if y_persist.nunique()<2:
+                idx = np.random.choice(y_persist.index, size=int(len(y_persist)*0.3), replace=False)
+                y_persist.iloc[idx]=1
+                print("Forced ~30% 'Persistence'.")
 
-            if y_persistence.nunique()<2:
-                flip_n = int(len(y_persistence)*0.3)
-                idx = np.random.choice(y_persistence.index, size=flip_n, replace=False)
-                y_persistence.iloc[idx] = 1
-                print("Forced ~30% persistence in y_persistence for demonstration.")
-
-            # RFE
-            print("Performing RFE for feature selection (based on Label target).")
+            # RFE (with label) => pick top 10
+            print("Performing RFE for feature selection with label as target.")
             base_model = RandomForestClassifier(n_estimators=100, random_state=42)
             rfe = RFE(estimator=base_model, n_features_to_select=10)
             rfe.fit(X_all, y_label)
@@ -542,7 +557,6 @@ class MILOTIC:
                 return gs.best_estimator_
 
             def evaluate_model(model, Xd, yd, label_name=""):
-                from sklearn.model_selection import train_test_split
                 X_tr, X_te, y_tr, y_te = train_test_split(Xd, yd, test_size=0.2, random_state=42, stratify=yd)
                 model.fit(X_tr, y_tr)
                 y_pred = model.predict(X_te)
@@ -555,12 +569,11 @@ class MILOTIC:
                 prec = precision_score(y_te, y_pred, zero_division=0)
                 rec = recall_score(y_te, y_pred, zero_division=0)
                 f1v = f1_score(y_te, y_pred, zero_division=0)
-
                 aucv = 0.0
                 if y_scores is not None and len(np.unique(y_te))>1:
                     aucv = roc_auc_score(y_te, y_scores)
 
-                print(f"{label_name} => ACC={acc:.4f}, PREC={prec:.4f}, REC={rec:.4f}, F1={f1v:.4f}, AUC={aucv:.4f}")
+                print(f"{label_name} => Acc={acc:.4f},Prec={prec:.4f},Rec={rec:.4f},F1={f1v:.4f},AUC={aucv:.4f}")
                 return {
                     f"{label_name} Accuracy": acc,
                     f"{label_name} Precision": prec,
@@ -569,38 +582,37 @@ class MILOTIC:
                     f"{label_name} AUC": aucv
                 }
 
-            X_sel = X_all[self.selected_features]
+            X_sel = X_all[self.selected_features].copy()
 
-            # Label
-            print("Training Label Model.")
+            # Label model
+            print("Training Label Model...")
             label_model = grid_search_rf(X_sel, y_label)
             label_metrics = evaluate_model(label_model, X_sel, y_label, "Label Model")
-            label_path = os.path.join(self.sModelOutputDir, "label_model.joblib")
-            joblib.dump(label_model, label_path)
-            self.sLabelModelPath = label_path
+            label_model_path = os.path.join(self.sModelOutputDir, "label_model.joblib")
+            joblib.dump(label_model, label_model_path)
+            self.sLabelModelPath = label_model_path
 
             # Defense
-            print("Training Defense Evasion Model.")
+            print("Training Defense Evasion Model...")
             defense_model = grid_search_rf(X_sel, y_defense)
             defense_metrics = evaluate_model(defense_model, X_sel, y_defense, "Defense Evasion Model")
-            defense_path = os.path.join(self.sModelOutputDir, "defense_model.joblib")
-            joblib.dump(defense_model, defense_path)
-            self.sTacticModelPath = defense_path
+            defense_model_path = os.path.join(self.sModelOutputDir, "defense_model.joblib")
+            joblib.dump(defense_model, defense_model_path)
+            self.sTacticModelPath = defense_model_path
 
             # Persistence
-            print("Training Persistence Model.")
-            persistence_model = grid_search_rf(X_sel, y_persistence)
-            persistence_metrics = evaluate_model(persistence_model, X_sel, y_persistence, "Persistence Model")
-            persist_path = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
-            joblib.dump(persistence_model, persist_path)
-            self.sPersistenceModelPath = persist_path
+            print("Training Persistence Model...")
+            persistence_model = grid_search_rf(X_sel, y_persist)
+            persist_metrics = evaluate_model(persistence_model, X_sel, y_persist, "Persistence Model")
+            persist_model_path = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
+            joblib.dump(persistence_model, persist_model_path)
+            self.sPersistenceModelPath = persist_model_path
 
-            # Merge metrics
+            # Merge
             combined = {}
             combined.update(label_metrics)
             combined.update(defense_metrics)
-            combined.update(persistence_metrics)
-            # convert to strings
+            combined.update(persist_metrics)
             out_metrics = {k: f"{v:.4f}" for k,v in combined.items()}
             self.updateMetricsDisplay(out_metrics)
 
@@ -608,47 +620,47 @@ class MILOTIC:
             raise RuntimeError(f"Training error: {ex}")
 
     ###########################################################################
-    #                     CLASSIFY CSV
+    #                    CLASSIFY CSV
     ###########################################################################
     def classifyCsv(self, csv_path):
         """
-        Ensures final output has 'Key' column even if missing,
-        excludes 'Key' from features if present, uses selected_features from RFE.
+        If 'Key' doesn't exist, create it. Then exclude 'Key' from features, 
+        but keep it in final output. Use 'selected_features' from the RFE above.
         """
         try:
             df = pd.read_csv(csv_path)
 
-            # Ensure a Key column for final output
             if 'Key' not in df.columns:
                 df['Key'] = ""
 
             if self.selected_features is None or len(self.selected_features) == 0:
-                raise ValueError("No selected_features found. Did you run the training first?")
+                raise ValueError("No selected_features found. Did you run training?")
 
             label_model = joblib.load(self.sLabelModelPath)
             defense_model = joblib.load(self.sTacticModelPath)
             persistence_model = joblib.load(self.sPersistenceModelPath)
 
-            # Exclude columns not used for features
+            # Exclude columns
             exclude_cols = []
-            for c in ['Key','Name','Value','Label','Tactic','Type','Type Group','Key Name Category','Path Category']:
+            for c in ['Key','Name','Value','Label','Tactic','Type','Type Group','KeyNameCategory','Path Category']:
                 if c in df.columns:
                     exclude_cols.append(c)
-
             X_all = df.drop(columns=exclude_cols, errors='ignore')
+
+            # Filter to selected
             X = X_all[self.selected_features].copy()
 
             # Label
             y_scores_label = label_model.predict_proba(X)[:,1]
-            y_pred_label = np.where(y_scores_label>=0.5, 'Malicious','Benign')
+            y_pred_label = np.where(y_scores_label>=0.5,'Malicious','Benign')
 
             # Defense
             y_scores_defense = defense_model.predict_proba(X)[:,1]
-            y_pred_defense = np.where(y_scores_defense>=0.5, 'Defense Evasion','None')
+            y_pred_defense = np.where(y_scores_defense>=0.5,'Defense Evasion','None')
 
             # Persistence
             y_scores_persist = persistence_model.predict_proba(X)[:,1]
-            y_pred_persist = np.where(y_scores_persist>=0.5, 'Persistence','None')
+            y_pred_persist = np.where(y_scores_persist>=0.5,'Persistence','None')
 
             df['Predicted Label'] = y_pred_label
             df['Predicted Tactic'] = np.where(y_pred_defense=='Defense Evasion','Defense Evasion',y_pred_persist)
@@ -663,7 +675,7 @@ class MILOTIC:
             raise RuntimeError(f"Classification error: {ex}")
 
     ###########################################################################
-    #                          METRICS
+    #                       METRICS
     ###########################################################################
     def updateMetricsDisplay(self, metrics):
         self.metricsList.delete(*self.metricsList.get_children())
