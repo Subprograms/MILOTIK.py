@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import re
+import chardet
 
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk, messagebox
@@ -160,6 +161,39 @@ class MILOTIC:
     ###########################################################################
     #                          MAKE DATASET
     ###########################################################################
+    def read_csv_with_fallbacks(filepath):
+        """
+        Reads a CSV file with automatic encoding detection and handles mixed data types.
+        
+        Parameters:
+        - filepath: str, path to the CSV file.
+
+        Returns:
+        - DataFrame containing the CSV data.
+        """
+        try:
+            # Detect encoding
+            with open(filepath, 'rb') as f:
+                result = chardet.detect(f.read(10000))  # Read first 10,000 bytes
+                encoding = result['encoding']
+                confidence = result['confidence']
+
+            print(f"Detected encoding: {encoding} with confidence {confidence:.2f}")
+
+            # Read CSV with proper options
+            df = pd.read_csv(filepath, encoding=encoding, encoding_errors='replace', 
+                             dtype=str, low_memory=False)  # Forces all columns to string to prevent dtype issues
+            return df
+
+        except FileNotFoundError:
+            print(f"Error: The file {filepath} was not found.")
+        except pd.errors.ParserError:
+            print(f"Error: Parsing error while reading {filepath}.")
+        except Exception as e:
+            print(f"Unexpected error occurred: {e}")
+
+        return pd.DataFrame()  # Return empty DataFrame if there's an error
+
     def parseRegistry(self, hive_path):
         """
         Parse the registry hive into raw columns: 'Key','Depth', 'Name','Value','Type', etc.
@@ -198,9 +232,10 @@ class MILOTIC:
 
     def makeDataset(self):
         """
-        1) parse + label => raw-labeled
-        2) save/append raw-labeled => rawParsed
-        3) preprocess => keep only Key + preprocessed columns + Label + Tactic => fillna(0) => training CSV
+        Parses registry data, applies labels, and prepares the dataset.
+        - Handles encoding errors while reading CSVs.
+        - Ensures missing values are properly handled.
+        - Saves preprocessed data for training.
         """
         try:
             if not os.path.exists(self.sHivePath):
@@ -212,7 +247,7 @@ class MILOTIC:
             print("Applying labels...")
             df_labeled = self.applyLabels(df_raw)
 
-            # Save/append raw-labeled
+            # Save or append raw-labeled data
             if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 self.appendToExistingCsv(df_labeled, self.sRawParsedCsvPath)
                 print(f"Appended raw-labeled data to: {self.sRawParsedCsvPath}")
@@ -221,20 +256,19 @@ class MILOTIC:
                 new_raw_path = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
                 df_labeled.to_csv(new_raw_path, index=False)
                 self.sRawParsedCsvPath = new_raw_path
-                self.rawParsedCsvInput.delete(0, tk.END)
+                self.rawParsedCsvInput.delete(0, "end")
                 self.rawParsedCsvInput.insert(0, new_raw_path)
                 print(f"Created new raw-labeled CSV: {new_raw_path}")
 
-            # Preprocess => keep only Key + label/tactic + new columns => fillna(0)
-            print("Preprocessing for training dataset (no RFE here)...")
+            # Preprocess data for training
+            print("Preprocessing for training dataset...")
             df_preproc = self.preprocessData(df_labeled)
 
-            # Now define final training columns: keep 'Key','Label','Tactic', plus the new columns
-            # We'll define a function to pick them
+            # Select training columns
             final_cols = self.selectTrainingColumns(df_preproc)
             df_preproc = df_preproc[final_cols]
 
-            # Fill all NaN with 0
+            # Fill NaN values with 0
             df_preproc.fillna(0, inplace=True)
 
             # Save or append to training dataset
@@ -246,7 +280,7 @@ class MILOTIC:
                 new_train_path = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
                 df_preproc.to_csv(new_train_path, index=False)
                 self.sTrainingDatasetPath = new_train_path
-                self.trainingDatasetInput.delete(0, tk.END)
+                self.trainingDatasetInput.delete(0, "end")
                 self.trainingDatasetInput.insert(0, new_train_path)
                 print(f"Created new training dataset: {new_train_path}")
                 messagebox.showinfo("Dataset Created", f"New training dataset: {new_train_path}")
@@ -622,57 +656,65 @@ class MILOTIC:
     ###########################################################################
     #                    CLASSIFY CSV
     ###########################################################################
-    def classifyCsv(self, csv_path):
+    def makeDataset(self):
         """
-        If 'Key' doesn't exist, create it. Then exclude 'Key' from features, 
-        but keep it in final output. Use 'selected_features' from the RFE above.
+        Parses registry data, applies labels, and prepares the dataset.
+        - Handles encoding errors while reading CSVs.
+        - Ensures missing values are properly handled.
+        - Saves preprocessed data for training.
         """
         try:
-            df = pd.read_csv(csv_path)
+            if not os.path.exists(self.sHivePath):
+                raise FileNotFoundError("Hive path not found.")
 
-            if 'Key' not in df.columns:
-                df['Key'] = ""
+            print("Parsing registry data...")
+            df_raw = self.parseRegistry(self.sHivePath)
 
-            if self.selected_features is None or len(self.selected_features) == 0:
-                raise ValueError("No selected_features found. Did you run training?")
+            print("Applying labels...")
+            df_labeled = self.applyLabels(df_raw)
 
-            label_model = joblib.load(self.sLabelModelPath)
-            defense_model = joblib.load(self.sTacticModelPath)
-            persistence_model = joblib.load(self.sPersistenceModelPath)
+            # Save or append raw-labeled data
+            if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
+                self.appendToExistingCsv(df_labeled, self.sRawParsedCsvPath)
+                print(f"Appended raw-labeled data to: {self.sRawParsedCsvPath}")
+            else:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_raw_path = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
+                df_labeled.to_csv(new_raw_path, index=False)
+                self.sRawParsedCsvPath = new_raw_path
+                self.rawParsedCsvInput.delete(0, "end")
+                self.rawParsedCsvInput.insert(0, new_raw_path)
+                print(f"Created new raw-labeled CSV: {new_raw_path}")
 
-            # Exclude columns
-            exclude_cols = []
-            for c in ['Key','Name','Value','Label','Tactic','Type','Type Group','KeyNameCategory','Path Category']:
-                if c in df.columns:
-                    exclude_cols.append(c)
-            X_all = df.drop(columns=exclude_cols, errors='ignore')
+            # Preprocess data for training
+            print("Preprocessing for training dataset...")
+            df_preproc = self.preprocessData(df_labeled)
 
-            # Filter to selected
-            X = X_all[self.selected_features].copy()
+            # Select training columns
+            final_cols = self.selectTrainingColumns(df_preproc)
+            df_preproc = df_preproc[final_cols]
 
-            # Label
-            y_scores_label = label_model.predict_proba(X)[:,1]
-            y_pred_label = np.where(y_scores_label>=0.5,'Malicious','Benign')
+            # Fill NaN values with 0
+            df_preproc.fillna(0, inplace=True)
 
-            # Defense
-            y_scores_defense = defense_model.predict_proba(X)[:,1]
-            y_pred_defense = np.where(y_scores_defense>=0.5,'Defense Evasion','None')
+            # Save or append to training dataset
+            if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
+                self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
+                print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
+            else:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_train_path = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
+                df_preproc.to_csv(new_train_path, index=False)
+                self.sTrainingDatasetPath = new_train_path
+                self.trainingDatasetInput.delete(0, "end")
+                self.trainingDatasetInput.insert(0, new_train_path)
+                print(f"Created new training dataset: {new_train_path}")
+                messagebox.showinfo("Dataset Created", f"New training dataset: {new_train_path}")
 
-            # Persistence
-            y_scores_persist = persistence_model.predict_proba(X)[:,1]
-            y_pred_persist = np.where(y_scores_persist>=0.5,'Persistence','None')
-
-            df['Predicted Label'] = y_pred_label
-            df['Predicted Tactic'] = np.where(y_pred_defense=='Defense Evasion','Defense Evasion',y_pred_persist)
-
-            out_path = os.path.join(self.sModelOutputDir,
-                f"classified_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-            df.to_csv(out_path, index=False)
-            print(f"Classified output saved to: {out_path}")
-            messagebox.showinfo("Classification Complete", f"Classified output saved to: {out_path}")
-
-        except Exception as ex:
-            raise RuntimeError(f"Classification error: {ex}")
+        except Exception as e:
+            msg = f"Error in makeDataset: {e}"
+            print(msg)
+            messagebox.showerror("Error", msg)
 
     ###########################################################################
     #                       METRICS
