@@ -161,7 +161,44 @@ class MILOTIC:
     ###########################################################################
     #                          MAKE DATASET
     ###########################################################################
-    
+    def read_csv_with_fallbacks(filepath):
+        """
+        Reads a CSV file with encoding detection and applies data cleaning.
+        - Detects encoding using chardet.
+        - Reads CSV while replacing errors.
+        - Cleans the dataframe before returning.
+
+        Returns:
+        - DataFrame containing the cleaned CSV data.
+        """
+        try:
+            # Detect encoding
+            with open(filepath, 'rb') as f:
+                result = chardet.detect(f.read(10000))  # Read first 10,000 bytes
+                encoding = result['encoding']
+                confidence = result['confidence']
+
+            print(f"Detected encoding: {encoding} with confidence {confidence:.2f}")
+
+            # Read CSV with proper settings
+            df = pd.read_csv(filepath, encoding=encoding, encoding_errors='replace', 
+                             dtype=str, low_memory=False)  # Force all columns to string
+            
+            # Clean the dataframe before returning
+            df = clean_dataframe(df)
+
+            return df
+
+        except FileNotFoundError:
+            print(f"Error: The file {filepath} was not found.")
+        except pd.errors.ParserError:
+            print(f"Error: Parsing error while reading {filepath}.")
+        except Exception as e:
+            print(f"Unexpected error occurred: {e}")
+
+        return pd.DataFrame()  # Return empty DataFrame if there's an error
+
+
     def clean_dataframe(df):
         """
         Cleans a DataFrame by:
@@ -196,45 +233,14 @@ class MILOTIC:
 
         return df
 
-    def read_csv_with_fallbacks(filepath):
-        """
-        Reads a CSV file with encoding detection and applies data cleaning.
-
-        Returns:
-        - DataFrame containing the cleaned CSV data.
-        """
-        try:
-            # Detect encoding
-            with open(filepath, 'rb') as f:
-                result = chardet.detect(f.read(10000))  # Read first 10,000 bytes
-                encoding = result['encoding']
-                confidence = result['confidence']
-
-            print(f"Detected encoding: {encoding} with confidence {confidence:.2f}")
-
-            # Read CSV with proper settings
-            df = pd.read_csv(filepath, encoding=encoding, encoding_errors='replace', 
-                             dtype=str, low_memory=False)  # Force all columns to string
-            
-            # Clean the dataframe before returning
-            df = clean_dataframe(df)
-
-            return df
-
-        except FileNotFoundError:
-            print(f"Error: The file {filepath} was not found.")
-        except pd.errors.ParserError:
-            print(f"Error: Parsing error while reading {filepath}.")
-        except Exception as e:
-            print(f"Unexpected error occurred: {e}")
-
-        return pd.DataFrame()  # Return empty DataFrame if there's an error
 
     def parseRegistry(self, hive_path):
         """
         Parse the registry hive into raw columns: 'Key','Depth', 'Name','Value','Type', etc.
         """
         from regipy import RegistryHive
+        from concurrent.futures import ThreadPoolExecutor
+
         xData = []
         subkey_counts = {}
         try:
@@ -251,21 +257,37 @@ class MILOTIC:
                     scount = subkey_counts.get(sKeyPath, 0)
 
                     for val in subkey.values:
+                        try:
+                            value_str = str(val.value) if val.value else "0"
+                        except Exception:
+                            value_str = "0"
+
+                        try:
+                            name_str = str(val.name) if val.name else "0"
+                        except Exception:
+                            name_str = "0"
+
+                        try:
+                            type_str = str(val.value_type) if val.value_type else "0"
+                        except Exception:
+                            type_str = "0"
+
                         xData.append({
                             "Key": sKeyPath,
                             "Depth": d,
                             "Key Size": ksz,
                             "Subkey Count": scount,
                             "Value Count": vcount,
-                            "Name": val.name,
-                            "Value": str(val.value),
-                            "Type": val.value_type
+                            "Name": name_str,
+                            "Value": value_str,
+                            "Type": type_str
                         })
+
             return pd.DataFrame(xData)
         except Exception as e:
-            messagebox.showerror("Error", f"Error parsing hive: {e}")
+            print(f"Error parsing hive: {e}")
             return pd.DataFrame()
-
+            
     def makeDataset(self):
         """
         Parses registry data, applies labels, and prepares the dataset.
