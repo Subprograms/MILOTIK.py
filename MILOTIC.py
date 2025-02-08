@@ -401,77 +401,83 @@ class MILOTIC:
     #                          APPLY LABELS
     ###########################################################################
     def applyLabels(self, df):
-        """Add 'Label','Tactic' to raw. Keep 'Key'. """
+        """
+        Assigns 'Label' (Malicious/Benign) and 'Tactic' (Persistence, etc.) to registry keys.
+        - Normalizes key paths for consistent matching.
+        - Handles variations in registry values correctly.
+    
+        Parameters:
+        - df: DataFrame containing registry data with 'Key', 'Name', 'Value', and 'Type'.
+ 
+        Returns:
+        - DataFrame with assigned 'Label' and 'Tactic'.
+        """
+    
         if 'Key' not in df.columns:
             raise KeyError("No 'Key' column in data for labeling.")
-
+  
         malicious_entries = []
+        tagged_entries = []
+
+        # Read Malicious Keys File
         if self.sMaliciousKeysPath and os.path.exists(self.sMaliciousKeysPath):
-            with open(self.sMaliciousKeysPath,'r', encoding='utf-8') as f:
+            with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
-                    entry = {
-                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
-                        "Name": parts[1].strip() if len(parts)>1 else None,
-                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                        "Type": parts[3].strip() if len(parts)>3 else None
-                    }
-                    malicious_entries.append(entry)
+                    if len(parts) >= 3:
+                        key_path = re.sub(r'\\+', r'\\', parts[0]).lower()  # Normalize backslashes
+                        malicious_entries.append({
+                            "Key": key_path,
+                            "Name": parts[1].strip().lower(),
+                            "Value": parts[2].strip().lower(),
+                            "Type": parts[3].strip().lower() if len(parts) > 3 else None
+                        })
 
-        tagged_entries = []
+        # Read Tagged Keys File
         if self.sTaggedKeysPath and os.path.exists(self.sTaggedKeysPath):
-            with open(self.sTaggedKeysPath,'r', encoding='utf-8') as f:
+            with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
-                    entry = {
-                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
-                        "Name": parts[1].strip() if len(parts)>1 else None,
-                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                        "Type": parts[3].strip() if len(parts)>3 else None,
-                        "Tactic": parts[4].strip() if len(parts)>4 else "Persistence"
-                    }
-                    tagged_entries.append(entry)
+                    parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
+                    if len(parts) >= 4:
+                        key_path = re.sub(r'\\+', r'\\', parts[0]).lower()  # Normalize backslashes
+                        tagged_entries.append({
+                            "Key": key_path,
+                            "Name": parts[1].strip().lower(),
+                            "Value": parts[2].strip().lower(),
+                            "Type": parts[3].strip().lower() if len(parts) > 3 else None,
+                            "Tactic": parts[4].strip().lower() if len(parts) > 4 else "Persistence"
+                        })
 
         def is_malicious(row):
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-            row_name = str(row['Name']).lower().strip()
-            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-            row_type = str(row['Type']).lower().strip()
-            for e in malicious_entries:
-                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
-                row_key_last = row_key.split('\\')[-1]
-                if row_key_last!=ekey_last:
-                    continue
-                if e['Name'] and row_name!=e['Name'].lower():
-                    continue
-                if e['Value'] and row_value!= e['Value'].lower():
-                    continue
-                if e['Type'] and row_type!= e['Type'].lower():
-                    continue
-                return 'Malicious'
-            return 'Benign'
+            """Check if a registry key matches any malicious entry."""
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())  # Normalize path
+            row_name = str(row['Name']).strip().lower()
+            row_value = str(row['Value']).strip().lower()
+            row_type = str(row['Type']).strip().lower()
+
+            for entry in malicious_entries:
+                if entry["Key"] in row_key and entry["Name"] == row_name and entry["Value"] in row_value:
+                    return "Malicious"
+            return "Benign"
 
         def assign_tactic(row):
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-            row_name = str(row['Name']).lower().strip()
-            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-            row_type = str(row['Type']).lower().strip()
-            for e in tagged_entries:
-                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
-                row_key_last = row_key.split('\\')[-1]
-                if row_key_last!=ekey_last:
-                    continue
-                if e['Name'] and row_name!=e['Name'].lower():
-                    continue
-                if e['Value'] and row_value!= e['Value'].lower():
-                    continue
-                if e['Type'] and row_type!= e['Type'].lower():
-                    continue
-                return e['Tactic']
-            return 'None'
+            """Assign a tactic if the registry key matches a tagged entry."""
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())  # Normalize path
+            row_name = str(row['Name']).strip().lower()
+            row_value = str(row['Value']).strip().lower()
+            row_type = str(row['Type']).strip().lower()
 
+            for entry in tagged_entries:
+                if entry["Key"] in row_key and entry["Name"] == row_name and entry["Value"] in row_value:
+                    return entry["Tactic"]
+            return "None"
+
+        # Apply Malicious Label
         df['Label'] = df.apply(is_malicious, axis=1)
+
+        # Apply Tactic Assignment
         df['Tactic'] = df.apply(assign_tactic, axis=1)
+
         return df
 
     ###########################################################################
