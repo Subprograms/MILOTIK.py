@@ -23,6 +23,92 @@ from sklearn.metrics import (
 from sklearn.feature_selection import RFE
 
 
+###########################################################################
+# 1) CLEANING FUNCTION
+###########################################################################
+def clean_dataframe(df, drop_all_zero_rows=True):
+    """
+    Cleans a DataFrame by:
+      - Converting non-printable or unreadable data to '0'
+      - Optionally dropping rows that are *entirely* zeros
+      - Does NOT drop columns (even if they are all zero)
+    """
+
+    def clean_text(value):
+        # If NaN or empty => '0'
+        if pd.isna(value) or value == "":
+            return "0"
+
+        # If it's raw bytes => decode or else '0'
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8", errors="replace")
+            except UnicodeDecodeError:
+                return "0"
+
+        # If string => strip out non-printable ASCII
+        if isinstance(value, str):
+            value = re.sub(r'[^\x20-\x7E]', '', value)
+            return value.strip() if value.strip() else "0"
+
+        # Otherwise try to stringify
+        return str(value)
+
+    # Clean each cell
+    for col in df.columns:
+        df[col] = df[col].apply(clean_text)
+
+    # Replace any lingering blanks with '0'
+    df.replace("", "0", inplace=True)
+    df.fillna("0", inplace=True)
+
+    # Optionally drop rows that are all '0'
+    if drop_all_zero_rows:
+        df = df[~df.eq("0").all(axis=1)]
+
+    # Do NOT drop columns, even if they're all "0"
+    return df
+
+
+###########################################################################
+# 2) CSV READER WITH FALLBACKS
+###########################################################################
+def read_csv_with_fallbacks(filepath):
+    """
+    Reads a CSV file with encoding detection and applies data cleaning.
+    - Detects encoding using chardet
+    - Reads CSV while replacing errors
+    - Cleans the dataframe (fill unparsable with '0')
+    - Keeps columns even if they are all zero
+    - Optionally drops rows that are 100% zero
+    """
+    try:
+        # Detect encoding by reading a chunk
+        with open(filepath, 'rb') as f:
+            result = chardet.detect(f.read(10000))
+            encoding = result['encoding']
+
+        print(f"Detected encoding: {encoding}")
+        df = pd.read_csv(
+            filepath,
+            encoding=encoding,
+            encoding_errors='replace',
+            dtype=str,  # Force string columns
+            low_memory=False
+        )
+
+        # Clean up data => fill unparsable cells with "0", etc.
+        df = clean_dataframe(df, drop_all_zero_rows=True)
+        return df
+
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        return pd.DataFrame()  # Return empty on error
+
+
+###########################################################################
+# 3) MAIN MILOTIC CLASS
+###########################################################################
 class MILOTIC:
     def __init__(self, root):
         self.root = root
@@ -161,86 +247,11 @@ class MILOTIC:
     ###########################################################################
     #                          MAKE DATASET
     ###########################################################################
-    def read_csv_with_fallbacks(filepath):
-        """
-        Reads a CSV file with encoding detection and applies data cleaning.
-        - Detects encoding using chardet.
-        - Reads CSV while replacing errors.
-        - Cleans the dataframe before returning.
-
-        Returns:
-        - DataFrame containing the cleaned CSV data.
-        """
-        try:
-            # Detect encoding
-            with open(filepath, 'rb') as f:
-                result = chardet.detect(f.read(10000))  # Read first 10,000 bytes
-                encoding = result['encoding']
-                confidence = result['confidence']
-
-            print(f"Detected encoding: {encoding} with confidence {confidence:.2f}")
-
-            # Read CSV with proper settings
-            df = pd.read_csv(filepath, encoding=encoding, encoding_errors='replace', 
-                             dtype=str, low_memory=False)  # Force all columns to string
-            
-            # Clean the dataframe before returning
-            df = clean_dataframe(df)
-
-            return df
-
-        except FileNotFoundError:
-            print(f"Error: The file {filepath} was not found.")
-        except pd.errors.ParserError:
-            print(f"Error: Parsing error while reading {filepath}.")
-        except Exception as e:
-            print(f"Unexpected error occurred: {e}")
-
-        return pd.DataFrame()  # Return empty DataFrame if there's an error
-
-
-    def clean_dataframe(df):
-        """
-        Cleans a DataFrame by:
-        - Replacing non-printable characters.
-        - Converting binary-like data to readable strings.
-        - Resetting unreadable values to "0".
-
-        Parameters:
-        - df: DataFrame to clean.
-
-        Returns:
-        - Cleaned DataFrame.
-        """
-        def clean_text(value):
-            if pd.isna(value) or value == "":
-                return "0"  # Convert NaNs or empty values to "0"
-            
-            if isinstance(value, bytes):
-                try:
-                    return value.decode("utf-8", errors="replace")  # Convert bytes to string
-                except UnicodeDecodeError:
-                    return "0"  # Reset unreadable binary data to "0"
-
-            if isinstance(value, str):
-                value = re.sub(r'[^\x20-\x7E]', '', value)  # Remove non-printable ASCII characters
-                return value.strip() if value.strip() else "0"  # Reset empty corrupt strings to "0"
-            
-            return str(value)  # Ensure everything is a string
-
-        for col in df.columns:
-            df[col] = df[col].apply(clean_text)
-
-        return df
-
-
     def parseRegistry(self, hive_path):
         """
         Parse the registry hive into raw columns: 'Key','Depth', 'Name','Value','Type', etc.
+        Then clean the resulting DataFrame with clean_dataframe()
         """
-        from regipy import RegistryHive
-        from concurrent.futures import ThreadPoolExecutor
-
         xData = []
         subkey_counts = {}
         try:
@@ -273,27 +284,33 @@ class MILOTIC:
                             type_str = "0"
 
                         xData.append({
-                            "Key": sKeyPath,
-                            "Depth": d,
-                            "Key Size": ksz,
-                            "Subkey Count": scount,
-                            "Value Count": vcount,
+                            "Key": sKeyPath if sKeyPath else "0",
+                            "Depth": d if d is not None else "0",
+                            "Key Size": ksz if ksz is not None else "0",
+                            "Subkey Count": scount if scount is not None else "0",
+                            "Value Count": vcount if vcount is not None else "0",
                             "Name": name_str,
                             "Value": value_str,
                             "Type": type_str
                         })
 
-            return pd.DataFrame(xData)
+            df = pd.DataFrame(xData)
+            # Clean the DataFrame => fill unparseable with '0'
+            df = clean_dataframe(df, drop_all_zero_rows=True)
+            return df
+
         except Exception as e:
             print(f"Error parsing hive: {e}")
             return pd.DataFrame()
-            
+
+
     def makeDataset(self):
         """
         Parses registry data, applies labels, and prepares the dataset.
-        - Handles encoding errors while reading CSVs.
-        - Cleans data and resets unreadable values.
-        - Saves preprocessed data for training.
+        - Cleans data and sets unparsable values to '0'
+        - Keeps columns even if they're all zero
+        - If any row is entirely '0', we drop that row
+        - Then saves/updates the training CSV
         """
         try:
             if not os.path.exists(self.sHivePath):
@@ -326,7 +343,8 @@ class MILOTIC:
             final_cols = self.selectTrainingColumns(df_preproc)
             df_preproc = df_preproc[final_cols]
 
-            # Fill NaN values with 0
+            # Fill NaN or blank with '0'
+            df_preproc.replace("", "0", inplace=True)
             df_preproc.fillna("0", inplace=True)
 
             # Save or append to training dataset
@@ -372,126 +390,152 @@ class MILOTIC:
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
         """
-        Append even if columns mismatch, by uniting columns.
-        Then fill columns that don't exist with NaN in each DataFrame.
+        Appends new_df to an existing CSV (csv_path), uniting columns and matching
+        column order. Missing columns/cells are filled with '0', so there are no empty
+        rows/columns in the final CSV.
+
+        Steps:
+          1) Read the existing CSV (if it exists).
+          2) Use new_df's columns as the 'reference order'.
+          3) If the existing CSV has extra columns, append them to the reference.
+          4) Reindex both DataFrames to that unified column list, in that order.
+          5) Fill missing cells with '0'.
+          6) Concatenate row-wise and save.
         """
         try:
+            # If the file doesn't exist yet, just save the new DataFrame
             if not csv_path or not os.path.exists(csv_path):
                 new_df.to_csv(csv_path, index=False)
-                print(f"Data saved to new CSV: {csv_path}")
+                print(f"[appendToExistingCsv] Created new CSV: {csv_path}")
                 return
 
-            existing_df = pd.read_csv(csv_path)
-            # union of columns
-            all_cols = set(existing_df.columns).union(set(new_df.columns))
-            all_cols = list(all_cols)
+            # 1) Read existing CSV
+            existing_df = pd.read_csv(csv_path, dtype=str)  # read as string
 
-            existing_df = existing_df.reindex(columns=all_cols)
-            new_df = new_df.reindex(columns=all_cols)
+            # 2) new_df's columns = the "desired" order
+            reference_cols = list(new_df.columns)
 
+            # 3) If the existing CSV has extra columns, keep them too (append them at the end)
+            for col in existing_df.columns:
+                if col not in reference_cols:
+                    reference_cols.append(col)
+
+            # 4) Reindex both DataFrames to that unified list, in that order
+            existing_df = existing_df.reindex(columns=reference_cols)
+            new_df = new_df.reindex(columns=reference_cols)
+
+            # 5) Fill empty or NaN cells with '0'
+            existing_df.fillna("0", inplace=True)
+            new_df.fillna("0", inplace=True)
+            existing_df.replace("", "0", inplace=True)
+            new_df.replace("", "0", inplace=True)
+
+            # 6) Concatenate row-wise
             combined = pd.concat([existing_df, new_df], ignore_index=True)
+
+            # (Optional) Drop rows that are all '0' if you never want fully empty rows:
+            # combined = combined.loc[~combined.eq("0").all(axis=1)]
+
+            # Finally, save combined
             combined.to_csv(csv_path, index=False)
-            print(f"Data appended (united columns) to existing CSV: {csv_path}")
+            print(f"[appendToExistingCsv] Appended + Reordered CSV: {csv_path}")
 
         except Exception as ex:
             print(f"Error appending to CSV ({csv_path}): {ex}")
+            # As a fallback, just save new_df so data isn't lost
             new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
     #                          APPLY LABELS
     ###########################################################################
     def applyLabels(self, df):
-        """
-        Assigns 'Label' (Malicious/Benign) and 'Tactic' (Persistence, etc.) to registry keys.
-        - Normalizes key paths for consistent matching.
-        - Handles variations in registry values correctly.
-    
-        Parameters:
-        - df: DataFrame containing registry data with 'Key', 'Name', 'Value', and 'Type'.
- 
-        Returns:
-        - DataFrame with assigned 'Label' and 'Tactic'.
-        """
-    
+        """Add 'Label','Tactic' to raw. Keep 'Key'. """
         if 'Key' not in df.columns:
             raise KeyError("No 'Key' column in data for labeling.")
-  
+
         malicious_entries = []
-        tagged_entries = []
-
-        # Read Malicious Keys File
         if self.sMaliciousKeysPath and os.path.exists(self.sMaliciousKeysPath):
-            with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
+            with open(self.sMaliciousKeysPath,'r', encoding='utf-8') as f:
                 for line in f:
                     parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
-                    if len(parts) >= 3:
-                        key_path = re.sub(r'\\+', r'\\', parts[0]).lower()  # Normalize backslashes
-                        malicious_entries.append({
-                            "Key": key_path,
-                            "Name": parts[1].strip().lower(),
-                            "Value": parts[2].strip().lower(),
-                            "Type": parts[3].strip().lower() if len(parts) > 3 else None
-                        })
+                    entry = {
+                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
+                        "Name": parts[1].strip() if len(parts)>1 else None,
+                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
+                        "Type": parts[3].strip() if len(parts)>3 else None
+                    }
+                    malicious_entries.append(entry)
 
-        # Read Tagged Keys File
+        tagged_entries = []
         if self.sTaggedKeysPath and os.path.exists(self.sTaggedKeysPath):
-            with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
+            with open(self.sTaggedKeysPath,'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
-                    if len(parts) >= 4:
-                        key_path = re.sub(r'\\+', r'\\', parts[0]).lower()  # Normalize backslashes
-                        tagged_entries.append({
-                            "Key": key_path,
-                            "Name": parts[1].strip().lower(),
-                            "Value": parts[2].strip().lower(),
-                            "Type": parts[3].strip().lower() if len(parts) > 3 else None,
-                            "Tactic": parts[4].strip().lower() if len(parts) > 4 else "Persistence"
-                        })
+                    parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
+                    entry = {
+                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
+                        "Name": parts[1].strip() if len(parts)>1 else None,
+                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
+                        "Type": parts[3].strip() if len(parts)>3 else None,
+                        "Tactic": parts[4].strip() if len(parts)>4 else "Persistence"
+                    }
+                    tagged_entries.append(entry)
 
         def is_malicious(row):
-            """Check if a registry key matches any malicious entry."""
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())  # Normalize path
-            row_name = str(row['Name']).strip().lower()
-            row_value = str(row['Value']).strip().lower()
-            row_type = str(row['Type']).strip().lower()
-
-            for entry in malicious_entries:
-                if entry["Key"] in row_key and entry["Name"] == row_name and entry["Value"] in row_value:
-                    return "Malicious"
-            return "Benign"
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
+            row_name = str(row['Name']).lower().strip()
+            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
+            row_type = str(row['Type']).lower().strip()
+            for e in malicious_entries:
+                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
+                row_key_last = row_key.split('\\')[-1]
+                if row_key_last!=ekey_last:
+                    continue
+                if e['Name'] and row_name!=e['Name'].lower():
+                    continue
+                if e['Value'] and row_value!= e['Value'].lower():
+                    continue
+                if e['Type'] and row_type!= e['Type'].lower():
+                    continue
+                return 'Malicious'
+            return 'Benign'
 
         def assign_tactic(row):
-            """Assign a tactic if the registry key matches a tagged entry."""
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())  # Normalize path
-            row_name = str(row['Name']).strip().lower()
-            row_value = str(row['Value']).strip().lower()
-            row_type = str(row['Type']).strip().lower()
+            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
+            row_name = str(row['Name']).lower().strip()
+            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
+            row_type = str(row['Type']).lower().strip()
+            for e in tagged_entries:
+                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
+                row_key_last = row_key.split('\\')[-1]
+                if row_key_last!=ekey_last:
+                    continue
+                if e['Name'] and row_name!=e['Name'].lower():
+                    continue
+                if e['Value'] and row_value!= e['Value'].lower():
+                    continue
+                if e['Type'] and row_type!= e['Type'].lower():
+                    continue
+                return e['Tactic']
+            return 'None'
 
-            for entry in tagged_entries:
-                if entry["Key"] in row_key and entry["Name"] == row_name and entry["Value"] in row_value:
-                    return entry["Tactic"]
-            return "None"
-
-        # Apply Malicious Label
         df['Label'] = df.apply(is_malicious, axis=1)
-
-        # Apply Tactic Assignment
         df['Tactic'] = df.apply(assign_tactic, axis=1)
-
         return df
 
     ###########################################################################
     #                         PREPROCESS (NO RFE)
     ###########################################################################
     def preprocessData(self, df):
-        """Scale numeric, get dummies, keep 'Key' etc, do not do RFE here."""
+        """
+        Scale numeric, get dummies, keep 'Key' etc,
+        do not do RFE here.
+        """
         if df.empty:
             print("No data to preprocess.")
             return pd.DataFrame()
 
-        from sklearn.preprocessing import MinMaxScaler, RobustScaler
-
         xDf = df.copy()
+        # For any numeric columns, fill NaN with mean => (already '0' in practice)
         numeric_df = xDf.select_dtypes(include=[np.number])
         xDf.fillna(numeric_df.mean(), inplace=True)
 
@@ -516,11 +560,15 @@ class MILOTIC:
         # scale numeric
         minmax = MinMaxScaler()
         minmax_cols = ['Depth','Value Count','Value Processed']
-        xDf[minmax_cols] = minmax.fit_transform(xDf[minmax_cols])
+        for col in minmax_cols:
+            if col in xDf.columns:
+                xDf[[col]] = minmax.fit_transform(xDf[[col]])
 
         robust = RobustScaler()
         robust_cols = ['Key Size','Subkey Count']
-        xDf[robust_cols] = robust.fit_transform(xDf[robust_cols])
+        for col in robust_cols:
+            if col in xDf.columns:
+                xDf[[col]] = robust.fit_transform(xDf[[col]])
 
         return xDf
 
@@ -538,7 +586,7 @@ class MILOTIC:
             "String": ["REG_SZ","REG_EXPAND_SZ","REG_MULTI_SZ"],
             "Numeric": ["REG_DWORD","REG_QWORD"],
             "Binary": ["REG_BINARY"],
-            "Others": ["REG_NONE","REG_LINK"]
+            "Others": ["REG_NONE","REG_LINK","0"]  # '0' -> unrecognized => Others
         }
         for g, vals in type_map.items():
             if t in vals:
@@ -553,8 +601,10 @@ class MILOTIC:
             "Internet and Network Keys": ["ProxyEnable","ProxyServer"],
             "File Execution Keys": ["ShellExecuteHooks"]
         }
+        # Convert to lower or do partial checks
+        low = kn.lower()
         for cat, keys in categories.items():
-            if any(k in kn for k in keys):
+            if any(k.lower() in low for k in keys):
                 return cat
         return "Other Keys"
 
@@ -576,7 +626,9 @@ class MILOTIC:
                 print("No classify CSV provided, using training dataset for classification test.")
                 self.sClassifyCsvPath = self.sTrainingDatasetPath
 
-            df_train = pd.read_csv(self.sTrainingDatasetPath)
+            df_train = pd.read_csv(self.sTrainingDatasetPath, dtype=str)
+            # Clean data just to be sure
+            df_train = clean_dataframe(df_train, drop_all_zero_rows=True)
             self.trainAndEvaluateModels(df_train)
 
             print("Classifying the provided CSV...")
@@ -599,12 +651,23 @@ class MILOTIC:
             if df.empty:
                 raise ValueError("Training dataset is empty")
 
+            # Convert numeric columns
+            for c in ['Depth','Key Size','Subkey Count','Value Count','Value Processed']:
+                if c in df.columns:
+                    df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
             # Remove columns not used for features
             exclude_cols = []
             for c in ['Key','Name','Value','Label','Tactic','Type','Type Group','Key Name Category','Path Category']:
                 if c in df.columns:
                     exclude_cols.append(c)
-            X_all = df.drop(columns=exclude_cols, errors='ignore')
+            X_all = df.drop(columns=exclude_cols, errors='ignore').copy()
+
+            # Convert leftover columns to numeric if possible
+            for col in X_all.columns:
+                if X_all[col].dtype == object:
+                    # If they're "0" or other ints => parse them
+                    X_all[col] = pd.to_numeric(X_all[col], errors='coerce').fillna(0)
 
             if 'Label' not in df.columns or 'Tactic' not in df.columns:
                 raise ValueError("Missing 'Label'/'Tactic' in dataset")
@@ -617,6 +680,7 @@ class MILOTIC:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
             from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+            from sklearn.feature_selection import RFE
 
             # Force multi-class if single
             if y_label.nunique()<2:
@@ -706,7 +770,7 @@ class MILOTIC:
             joblib.dump(persistence_model, persist_model_path)
             self.sPersistenceModelPath = persist_model_path
 
-            # Merge
+            # Merge metrics
             combined = {}
             combined.update(label_metrics)
             combined.update(defense_metrics)
@@ -723,15 +787,23 @@ class MILOTIC:
     def classifyCsv(self, csv_path):
         """
         Classifies a CSV dataset using pre-trained models.
-        - Uses robust encoding detection.
-        - Ensures missing columns are handled properly.
-        - Saves classification results to a new CSV.
+        - Uses robust encoding detection
+        - Ensures missing columns are handled properly
+        - Saves classification results to a new CSV
         """
         try:
             df = read_csv_with_fallbacks(csv_path)
+            if df.empty:
+                raise ValueError("No data to classify (empty DataFrame).")
 
             if 'Key' not in df.columns:
                 df['Key'] = "UNKNOWN"
+
+            # Convert columns to numeric where possible
+            for col in df.columns:
+                # If it's "Depth," etc. => numeric
+                if col not in ['Key','Name','Value','Label','Tactic','Type','Type Group','Key Name Category','Path Category']:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
             if self.selected_features is None or len(self.selected_features) == 0:
                 raise ValueError("No selected features found. Did you run training?")
@@ -741,25 +813,35 @@ class MILOTIC:
             persistence_model = joblib.load(self.sPersistenceModelPath)
 
             # Exclude non-feature columns
-            exclude_cols = ['Key', 'Name', 'Value', 'Label', 'Tactic', 'Type', 'Type Group', 'KeyNameCategory', 'Path Category']
+            exclude_cols = ['Key','Name','Value','Label','Tactic','Type','Type Group','Key Name Category','Path Category']
             X_all = df.drop(columns=exclude_cols, errors='ignore')
 
-            # Use only selected features
-            X = X_all[self.selected_features].copy()
+            # Use only selected features (set missing => 0)
+            for col in self.selected_features:
+                if col not in X_all.columns:
+                    X_all[col] = 0
+            X_all = X_all[self.selected_features].copy()
+
+            # Convert to numeric
+            for col in X_all.columns:
+                X_all[col] = pd.to_numeric(X_all[col], errors='coerce').fillna(0)
 
             # Predict labels
-            y_scores_label = label_model.predict_proba(X)[:, 1]
+            y_scores_label = label_model.predict_proba(X_all)[:, 1]
             y_pred_label = np.where(y_scores_label >= 0.5, 'Malicious', 'Benign')
 
             # Predict tactics
-            y_scores_defense = defense_model.predict_proba(X)[:, 1]
+            y_scores_defense = defense_model.predict_proba(X_all)[:, 1]
             y_pred_defense = np.where(y_scores_defense >= 0.5, 'Defense Evasion', 'None')
 
-            y_scores_persist = persistence_model.predict_proba(X)[:, 1]
+            y_scores_persist = persistence_model.predict_proba(X_all)[:, 1]
             y_pred_persist = np.where(y_scores_persist >= 0.5, 'Persistence', 'None')
 
             df['Predicted Label'] = y_pred_label
-            df['Predicted Tactic'] = np.where(y_pred_defense == 'Defense Evasion', 'Defense Evasion', y_pred_persist)
+            # If defense is triggered, it's "Defense Evasion," else check persistence
+            df['Predicted Tactic'] = np.where(y_pred_defense == 'Defense Evasion',
+                                              'Defense Evasion',
+                                              y_pred_persist)
 
             # Save classified output
             out_path = os.path.join(self.sModelOutputDir, f"classified_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
@@ -781,6 +863,9 @@ class MILOTIC:
             self.metricsList.insert("", "end", values=(metric, val))
 
 
+###########################################################################
+# MAIN
+###########################################################################
 if __name__ == "__main__":
     root = tk.Tk()
     app = MILOTIC(root)
