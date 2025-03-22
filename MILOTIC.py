@@ -676,12 +676,6 @@ class MILOTIC:
             y_defense = (df['Tactic']=='Defense Evasion').astype(int)
             y_persist = (df['Tactic']=='Persistence').astype(int)
 
-            import numpy as np
-            from sklearn.ensemble import RandomForestClassifier
-            from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
-            from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-            from sklearn.feature_selection import RFE
-
             # Force multi-class if single
             if y_label.nunique()<2:
                 idx = np.random.choice(y_label.index, size=int(len(y_label)*0.3), replace=False)
