@@ -69,6 +69,118 @@ def clean_dataframe(df, drop_all_zero_rows=True):
     # Do NOT drop columns, even if they're all "0"
     return df
 
+###########################################################################
+# HELPER: SAFE CSV READER THAT SKIPS BAD LINES
+###########################################################################
+def safe_read_csv(filepath: str) -> pd.DataFrame:
+    """
+    Reads a CSV file but skips any badly formed lines (which cause the
+    'C error: Expected X fields ... saw Y' in pandas). Returns a DataFrame
+    of all successfully-read rows.
+    """
+    import pandas as pd
+    try:
+        df = pd.read_csv(
+            filepath,
+            dtype=str,
+            low_memory=False,
+            on_bad_lines='skip'  # Skip lines that don't match expected columns
+        )
+        return df
+    except Exception as e:
+        print(f"[safe_read_csv] Error reading '{filepath}': {e}")
+        return pd.DataFrame()
+
+###########################################################################
+# HELPER: MERGE DUPLICATE COLUMNS
+###########################################################################
+def merge_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    If the CSV has duplicate column names, merge them. Here, we simply
+    'combine' by taking first non-NA values from left to right.
+    """
+    from collections import defaultdict
+    
+    # Check if there are any duplicates first:
+    duplicates_exist = df.columns.duplicated().any()
+    if not duplicates_exist:
+        # No duplicate column names, just return
+        return df
+    
+    # We rebuild a new DataFrame by grouping all columns with the same name
+    new_df = pd.DataFrame()
+    unique_cols = df.columns.unique()
+    
+    for col in unique_cols:
+        # Extract all columns with this same name
+        same_name_slice = df.loc[:, df.columns == col]
+        
+        # Example strategy: forward/backward fill across these columns, then take one series
+        merged_series = same_name_slice.bfill(axis=1).ffill(axis=1).iloc[:, 0]
+        
+        new_df[col] = merged_series
+    
+    return new_df
+
+###########################################################################
+# HELPER: REMOVE NON-TRAINING COLUMNS
+###########################################################################
+def remove_non_training_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drops columns that are certainly not used for training, so they don't
+    break your pipeline or create confusion. Adjust the 'needed' set to
+    match what your code requires for training features + labels.
+    """
+    needed_columns = {
+    # --- Raw / Original columns referenced ---
+    "Key",
+    "Name",
+    "Value",
+    "Type",
+    "Label",
+    "Tactic",
+
+    # --- Numeric columns from registry parsing ---
+    "Depth",
+    "Key Size",
+    "Subkey Count",
+    "Value Count",
+    "Value Processed",
+
+    # --- Intermediate categorical columns (before one-hot encoding) ---
+    "Path Category",
+    "Type Group",
+    "Key Name Category",
+
+    # --- OHE columns for "Path Category" ---
+    "PathCategory_Startup Path",
+    "PathCategory_Service Path",
+    "PathCategory_Network Path",
+    "PathCategory_Other Path",
+
+    # --- OHE columns for "Type Group" ---
+    "TypeGroup_String",
+    "TypeGroup_Numeric",
+    "TypeGroup_Binary",
+    "TypeGroup_Others",
+
+    # --- OHE columns for "Key Name Category" ---
+    "KeyNameCategory_Run Keys",
+    "KeyNameCategory_Service Keys",
+    "KeyNameCategory_Security and Configuration Keys",
+    "KeyNameCategory_Internet and Network Keys",
+    "KeyNameCategory_File Execution Keys",
+    "KeyNameCategory_Other Keys",
+    }
+    
+    # Make a list of columns to drop, i.e. those not in 'needed_columns'
+    drop_cols = [c for c in df.columns if c not in needed_columns]
+    
+    if drop_cols:
+        print(f"[remove_non_training_columns] Dropping columns: {drop_cols}")
+        df.drop(columns=drop_cols, inplace=True, errors='ignore')
+    
+    return df
 
 ###########################################################################
 # 2) CSV READER WITH FALLBACKS
@@ -389,44 +501,61 @@ class MILOTIC:
         return [col for col in keep_cols if col in df.columns]
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
-        expected_column_count = 21
+        """
+        Appends new_df to an existing CSV (csv_path), uniting columns and matching
+        column order. Missing columns/cells are filled with '0', so there are no empty
+        rows/columns in the final CSV.
 
+        Steps:
+          1) Read the existing CSV (if it exists).
+          2) Use new_df's columns as the 'reference order'.
+          3) If the existing CSV has extra columns, append them to the reference.
+          4) Reindex both DataFrames to that unified column list, in that order.
+          5) Fill missing cells with '0'.
+          6) Concatenate row-wise and save.
+        """
         try:
+            # If the file doesn't exist yet, just save the new DataFrame
             if not csv_path or not os.path.exists(csv_path):
-                # Trim and save new_df directly
-                new_df = new_df.iloc[:, :expected_column_count]
                 new_df.to_csv(csv_path, index=False)
-                print(f"[appendToExistingCsv] Created new cleaned CSV: {csv_path}")
+                print(f"[appendToExistingCsv] Created new CSV: {csv_path}")
                 return
 
-            # Step 1: Manually read only valid rows from existing file
-            valid_rows = []
-            with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) == expected_column_count:
-                        valid_rows.append(row)
+            # 1) Read existing CSV
+            existing_df = pd.read_csv(csv_path, dtype=str)  # read as string
 
-            # Step 2: Create DataFrame from valid rows
-            existing_df = pd.DataFrame(valid_rows[1:], columns=valid_rows[0])
+            # 2) new_df's columns = the "desired" order
+            reference_cols = list(new_df.columns)
 
-            # Step 3: Clean new_df
-            if new_df.shape[1] != expected_column_count:
-                new_df = new_df.iloc[:, :expected_column_count]
-            new_df.columns = existing_df.columns[:expected_column_count]  # Align column names
-            new_df = new_df.reindex(columns=existing_df.columns, fill_value='0')
+            # 3) If the existing CSV has extra columns, keep them too (append them at the end)
+            for col in existing_df.columns:
+                if col not in reference_cols:
+                    reference_cols.append(col)
 
-            # Step 4: Combine and save
+            # 4) Reindex both DataFrames to that unified list, in that order
+            existing_df = existing_df.reindex(columns=reference_cols)
+            new_df = new_df.reindex(columns=reference_cols)
+
+            # 5) Fill empty or NaN cells with '0'
+            existing_df.fillna("0", inplace=True)
+            new_df.fillna("0", inplace=True)
+            existing_df.replace("", "0", inplace=True)
+            new_df.replace("", "0", inplace=True)
+
+            # 6) Concatenate row-wise
             combined = pd.concat([existing_df, new_df], ignore_index=True)
-            combined.replace("", "0", inplace=True)
-            combined.fillna("0", inplace=True)
-            combined.to_csv(csv_path, index=False)
 
-            print(f"[appendToExistingCsv] Cleaned, combined CSV saved: {csv_path}")
+            # (Optional) Drop rows that are all '0' if you never want fully empty rows:
+            # combined = combined.loc[~combined.eq("0").all(axis=1)]
+
+            # Finally, save combined
+            combined.to_csv(csv_path, index=False)
+            print(f"[appendToExistingCsv] Appended + Reordered CSV: {csv_path}")
 
         except Exception as ex:
-            print(f"[appendToExistingCsv] Fallback save due to error: {ex}")
-            new_df.iloc[:, :expected_column_count].to_csv(csv_path, index=False)
+            print(f"Error appending to CSV ({csv_path}): {ex}")
+            # As a fallback, just save new_df so data isn't lost
+            new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
     #                          APPLY LABELS
@@ -601,26 +730,39 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        If no classify CSV => use training dataset for classification test.
-        Then train->evaluate->classify.
+        If no classify CSV is provided, we just use the training dataset for a
+        test classification. Then we read the training CSV in a robust manner,
+        fix duplicates, drop unneeded columns, and proceed with training.
         """
         try:
+            # If user didn't provide a CSV to classify, just use the training set
             if not self.sClassifyCsvPath:
                 print("No classify CSV provided, using training dataset for classification test.")
                 self.sClassifyCsvPath = self.sTrainingDatasetPath
 
-            df_train = pd.read_csv(self.sTrainingDatasetPath, dtype=str)
-            # Clean data just to be sure
+            # -- 1) Read training CSV in a safer way (skip malformed lines)
+            df_train = safe_read_csv(self.sTrainingDatasetPath)
+            
+            # -- 2) Merge duplicated column names if any
+            df_train = merge_duplicate_columns(df_train)
+
+            # -- 3) Drop columns that are truly not needed for training
+            df_train = remove_non_training_columns(df_train)
+
+            # -- 4) Clean up data, dropping rows that are entirely "0"
             df_train = clean_dataframe(df_train, drop_all_zero_rows=True)
+
+            # -- 5) Proceed with training
             self.trainAndEvaluateModels(df_train)
 
+            # -- 6) Classify the user-provided CSV (or the training set if none)
             print("Classifying the provided CSV...")
             self.classifyCsv(self.sClassifyCsvPath)
 
             messagebox.showinfo("ML Process Complete", "Finished training & classification!")
+
         except Exception as ex:
             messagebox.showerror("Error", f"Error in ML process: {ex}")
-
     ###########################################################################
     #                TRAIN AND EVALUATE MODELS
     ###########################################################################
