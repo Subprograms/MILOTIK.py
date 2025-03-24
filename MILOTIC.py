@@ -390,59 +390,55 @@ class MILOTIC:
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
         """
-        Appends new_df to an existing CSV (csv_path), uniting columns and matching
-        column order. Missing columns/cells are filled with '0', so there are no empty
-        rows/columns in the final CSV.
-
-        Steps:
-          1) Read the existing CSV (if it exists).
-          2) Use new_df's columns as the 'reference order'.
-          3) If the existing CSV has extra columns, append them to the reference.
-          4) Reindex both DataFrames to that unified column list, in that order.
-          5) Fill missing cells with '0'.
-          6) Concatenate row-wise and save.
+        Appends new_df to an existing CSV (csv_path), ensuring:
+          - Duplicate columns are merged
+          - Extra columns not used in training are removed
+          - All rows have consistent column count
+          - Missing values are filled with '0'
         """
         try:
-            # If the file doesn't exist yet, just save the new DataFrame
+            # Save directly if file doesn't exist
             if not csv_path or not os.path.exists(csv_path):
                 new_df.to_csv(csv_path, index=False)
                 print(f"[appendToExistingCsv] Created new CSV: {csv_path}")
                 return
 
-            # 1) Read existing CSV
-            existing_df = pd.read_csv(csv_path, dtype=str)  # read as string
+            existing_df = pd.read_csv(csv_path, dtype=str, on_bad_lines='skip')
 
-            # 2) new_df's columns = the "desired" order
-            reference_cols = list(new_df.columns)
+            # Merge duplicate columns in both dataframes
+            def merge_duplicate_columns(df):
+                cols = pd.Series(df.columns)
+                for dup in cols[cols.duplicated()].unique():
+                    dup_cols = df.loc[:, df.columns == dup]
+                    merged = dup_cols.apply(lambda row: next((v for v in row if v not in [None, '', '0']), '0'), axis=1)
+                    df = df.drop(columns=dup_cols.columns)
+                    df[dup] = merged
+                return df
 
-            # 3) If the existing CSV has extra columns, keep them too (append them at the end)
-            for col in existing_df.columns:
-                if col not in reference_cols:
-                    reference_cols.append(col)
+            existing_df = merge_duplicate_columns(existing_df)
+            new_df = merge_duplicate_columns(new_df)
 
-            # 4) Reindex both DataFrames to that unified list, in that order
-            existing_df = existing_df.reindex(columns=reference_cols)
-            new_df = new_df.reindex(columns=reference_cols)
+            # Establish allowed columns: from new_df (training format is controlled here)
+            allowed_cols = set(new_df.columns)
 
-            # 5) Fill empty or NaN cells with '0'
-            existing_df.fillna("0", inplace=True)
-            new_df.fillna("0", inplace=True)
-            existing_df.replace("", "0", inplace=True)
-            new_df.replace("", "0", inplace=True)
+            # Trim extra columns in existing that aren't in new (assume not useful for training)
+            trimmed_existing = existing_df[[c for c in existing_df.columns if c in allowed_cols]]
 
-            # 6) Concatenate row-wise
-            combined = pd.concat([existing_df, new_df], ignore_index=True)
+            # Add any missing columns to both and align order
+            all_columns = sorted(allowed_cols.union(trimmed_existing.columns))
+            new_df = new_df.reindex(columns=all_columns, fill_value='0')
+            trimmed_existing = trimmed_existing.reindex(columns=all_columns, fill_value='0')
 
-            # (Optional) Drop rows that are all '0' if you never want fully empty rows:
-            # combined = combined.loc[~combined.eq("0").all(axis=1)]
-
-            # Finally, save combined
+            # Combine and save
+            combined = pd.concat([trimmed_existing, new_df], ignore_index=True)
+            combined.fillna("0", inplace=True)
+            combined.replace("", "0", inplace=True)
             combined.to_csv(csv_path, index=False)
-            print(f"[appendToExistingCsv] Appended + Reordered CSV: {csv_path}")
-
+            print(f"[appendToExistingCsv] Cleaned + Appended CSV saved: {csv_path}")
+            
         except Exception as ex:
-            print(f"Error appending to CSV ({csv_path}): {ex}")
-            # As a fallback, just save new_df so data isn't lost
+            print(f"Error in appendToExistingCsv: {ex}")
+            # Fallback: save only new_df to avoid total failure
             new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
