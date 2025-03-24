@@ -389,46 +389,44 @@ class MILOTIC:
         return [col for col in keep_cols if col in df.columns]
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
-        """
-        Appends new_df to an existing CSV
-        """
-        try:
-            # Force new_df to only use first 21 columns
-            if new_df.shape[1] > 21:
-                print(f"[appendToExistingCsv] Trimming new_df from {new_df.shape[1]} to 21 columns")
-                new_df = new_df.iloc[:, :21]
+        expected_column_count = 21
 
-            # If no file exists, save trimmed new_df directly
+        try:
             if not csv_path or not os.path.exists(csv_path):
+                # Trim and save new_df directly
+                new_df = new_df.iloc[:, :expected_column_count]
                 new_df.to_csv(csv_path, index=False)
-                print(f"[appendToExistingCsv] Created new CSV with 21 columns: {csv_path}")
+                print(f"[appendToExistingCsv] Created new cleaned CSV: {csv_path}")
                 return
 
-            # Read existing CSV with only 21 columns (skip bad lines)
-            existing_df = pd.read_csv(csv_path, dtype=str, on_bad_lines='skip')
+            # Step 1: Manually read only valid rows from existing file
+            valid_rows = []
+            with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) == expected_column_count:
+                        valid_rows.append(row)
 
-            if existing_df.shape[1] > 21:
-                print(f"[appendToExistingCsv] Trimming existing_df from {existing_df.shape[1]} to 21 columns")
-                existing_df = existing_df.iloc[:, :21]
+            # Step 2: Create DataFrame from valid rows
+            existing_df = pd.DataFrame(valid_rows[1:], columns=valid_rows[0])
 
-            # Ensure both DataFrames have exactly same columns (by name and order)
-            column_names = list(existing_df.columns[:21])
-            new_df.columns = column_names[:len(new_df.columns)]  # rename to match if needed
-            new_df = new_df.reindex(columns=column_names, fill_value='0')
-            existing_df = existing_df.reindex(columns=column_names, fill_value='0')
+            # Step 3: Clean new_df
+            if new_df.shape[1] != expected_column_count:
+                new_df = new_df.iloc[:, :expected_column_count]
+            new_df.columns = existing_df.columns[:expected_column_count]  # Align column names
+            new_df = new_df.reindex(columns=existing_df.columns, fill_value='0')
 
-            # Fill blanks and merge
-            new_df.replace("", "0", inplace=True)
-            existing_df.replace("", "0", inplace=True)
-            new_df.fillna("0", inplace=True)
-            existing_df.fillna("0", inplace=True)
-
+            # Step 4: Combine and save
             combined = pd.concat([existing_df, new_df], ignore_index=True)
+            combined.replace("", "0", inplace=True)
+            combined.fillna("0", inplace=True)
             combined.to_csv(csv_path, index=False)
-            print(f"[appendToExistingCsv] Final cleaned CSV saved: {csv_path}")
+
+            print(f"[appendToExistingCsv] Cleaned, combined CSV saved: {csv_path}")
+
         except Exception as ex:
-            print(f"Error in appendToExistingCsv: {ex}")
-            new_df.to_csv(csv_path, index=False)
+            print(f"[appendToExistingCsv] Fallback save due to error: {ex}")
+            new_df.iloc[:, :expected_column_count].to_csv(csv_path, index=False)
 
     ###########################################################################
     #                          APPLY LABELS
