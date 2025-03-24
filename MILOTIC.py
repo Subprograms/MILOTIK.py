@@ -142,11 +142,6 @@ def remove_non_training_columns(df: pd.DataFrame) -> pd.DataFrame:
     "Value Count",
     "Value Processed",
 
-    # --- Intermediate categorical columns (before one-hot encoding) ---
-    "Path Category",
-    "Type Group",
-    "Key Name Category",
-
     # --- OHE columns for "Path Category" ---
     "PathCategory_Startup Path",
     "PathCategory_Service Path",
