@@ -127,16 +127,11 @@ def merge_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
 ###########################################################################
 def remove_non_training_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Drops columns that are certainly not used for training, so they don't
-    break your pipeline or create confusion. Adjust the 'needed' set to
-    match what your code requires for training features + labels.
+    Drops columns that are certainly not used for training.
     """
     needed_columns = {
     # --- Raw / Original columns referenced ---
     "Key",
-    "Name",
-    "Value",
-    "Type",
     "Label",
     "Tactic",
 
