@@ -390,55 +390,44 @@ class MILOTIC:
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
         """
-        Appends new_df to an existing CSV (csv_path), ensuring:
-          - Duplicate columns are merged
-          - Extra columns not used in training are removed
-          - All rows have consistent column count
-          - Missing values are filled with '0'
+        Appends new_df to an existing CSV
         """
         try:
-            # Save directly if file doesn't exist
+            # Force new_df to only use first 21 columns
+            if new_df.shape[1] > 21:
+                print(f"[appendToExistingCsv] Trimming new_df from {new_df.shape[1]} to 21 columns")
+                new_df = new_df.iloc[:, :21]
+
+            # If no file exists, save trimmed new_df directly
             if not csv_path or not os.path.exists(csv_path):
                 new_df.to_csv(csv_path, index=False)
-                print(f"[appendToExistingCsv] Created new CSV: {csv_path}")
+                print(f"[appendToExistingCsv] Created new CSV with 21 columns: {csv_path}")
                 return
 
+            # Read existing CSV with only 21 columns (skip bad lines)
             existing_df = pd.read_csv(csv_path, dtype=str, on_bad_lines='skip')
 
-            # Merge duplicate columns in both dataframes
-            def merge_duplicate_columns(df):
-                cols = pd.Series(df.columns)
-                for dup in cols[cols.duplicated()].unique():
-                    dup_cols = df.loc[:, df.columns == dup]
-                    merged = dup_cols.apply(lambda row: next((v for v in row if v not in [None, '', '0']), '0'), axis=1)
-                    df = df.drop(columns=dup_cols.columns)
-                    df[dup] = merged
-                return df
+            if existing_df.shape[1] > 21:
+                print(f"[appendToExistingCsv] Trimming existing_df from {existing_df.shape[1]} to 21 columns")
+                existing_df = existing_df.iloc[:, :21]
 
-            existing_df = merge_duplicate_columns(existing_df)
-            new_df = merge_duplicate_columns(new_df)
+            # Ensure both DataFrames have exactly same columns (by name and order)
+            column_names = list(existing_df.columns[:21])
+            new_df.columns = column_names[:len(new_df.columns)]  # rename to match if needed
+            new_df = new_df.reindex(columns=column_names, fill_value='0')
+            existing_df = existing_df.reindex(columns=column_names, fill_value='0')
 
-            # Establish allowed columns: from new_df (training format is controlled here)
-            allowed_cols = set(new_df.columns)
+            # Fill blanks and merge
+            new_df.replace("", "0", inplace=True)
+            existing_df.replace("", "0", inplace=True)
+            new_df.fillna("0", inplace=True)
+            existing_df.fillna("0", inplace=True)
 
-            # Trim extra columns in existing that aren't in new (assume not useful for training)
-            trimmed_existing = existing_df[[c for c in existing_df.columns if c in allowed_cols]]
-
-            # Add any missing columns to both and align order
-            all_columns = sorted(allowed_cols.union(trimmed_existing.columns))
-            new_df = new_df.reindex(columns=all_columns, fill_value='0')
-            trimmed_existing = trimmed_existing.reindex(columns=all_columns, fill_value='0')
-
-            # Combine and save
-            combined = pd.concat([trimmed_existing, new_df], ignore_index=True)
-            combined.fillna("0", inplace=True)
-            combined.replace("", "0", inplace=True)
+            combined = pd.concat([existing_df, new_df], ignore_index=True)
             combined.to_csv(csv_path, index=False)
-            print(f"[appendToExistingCsv] Cleaned + Appended CSV saved: {csv_path}")
-            
+            print(f"[appendToExistingCsv] Final cleaned CSV saved: {csv_path}")
         except Exception as ex:
             print(f"Error in appendToExistingCsv: {ex}")
-            # Fallback: save only new_df to avoid total failure
             new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
