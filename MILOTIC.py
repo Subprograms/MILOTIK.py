@@ -819,7 +819,7 @@ class MILOTIC:
                     'max_depth':[None,10],
                     'min_samples_split':[2,5],
                     'min_samples_leaf':[1,2],
-                    'bootstrap':[True,False]
+                    'bootstrap':[True,False],
                     'class_weight': [None, 'balanced', {0: 1, 1: 3}, {0: 1, 1: 5}]
                 }
                 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
