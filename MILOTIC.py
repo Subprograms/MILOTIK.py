@@ -72,23 +72,41 @@ def clean_dataframe(df, drop_all_zero_rows=True):
 ###########################################################################
 # HELPER: SAFE CSV READER THAT SKIPS BAD LINES
 ###########################################################################
-def safe_read_csv(filepath: str) -> pd.DataFrame:
+def safe_read_csv(filepath: str, sample_frac=0.20) -> pd.DataFrame:
     """
-    Reads a CSV file but skips any badly formed lines (which cause the
-    'C error: Expected X fields ... saw Y' in pandas). Returns a DataFrame
-    of all successfully-read rows.
+    Reads a CSV file in chunks, and for each chunk:
+      - keeps only a fraction (sample_frac) of the rows
+      - concatenates them into a final DataFrame
+    This prevents loading the entire CSV into memory at once.
     """
     import pandas as pd
+
+    chunk_list = []
+    chunk_size = 20_000_000  # Or pick another size your machine can handle
+
     try:
-        df = pd.read_csv(
+        # Use pandas chunked reading
+        for chunk in pd.read_csv(
             filepath,
             dtype=str,
-            low_memory=False,
-            on_bad_lines='skip'  # Skip lines that don't match expected columns
-        )
-        return df
+            low_memory=True,
+            on_bad_lines='skip',
+            chunksize=chunk_size
+        ):
+            # Sample only a fraction from this chunk
+            # sample_frac=0.01 => keep ~1% of rows from each chunk
+            sampled_chunk = chunk.sample(frac=sample_frac, random_state=42)
+            chunk_list.append(sampled_chunk)
+
+        # Concatenate all sampled chunks
+        df_sampled = pd.concat(chunk_list, ignore_index=True)
+
+        # Now clean the resulting smaller DataFrame
+        df_sampled = clean_dataframe(df_sampled, drop_all_zero_rows=True)
+        return df_sampled
+
     except Exception as e:
-        print(f"[safe_read_csv] Error reading '{filepath}': {e}")
+        print(f"[safe_read_csv chunked] Error reading '{filepath}': {e}")
         return pd.DataFrame()
 
 ###########################################################################
@@ -813,14 +831,29 @@ class MILOTIC:
             self.selected_features = X_all.columns[rfe.support_]
             print("Selected features =>", list(self.selected_features))
 
-            def grid_search_rf(Xp, yp):
+            def label_grid_search_rf(Xp, yp):
                 param_grid = {
-                    'n_estimators':[50,100],
-                    'max_depth':[None,10],
-                    'min_samples_split':[2,5],
-                    'min_samples_leaf':[1,2],
-                    'bootstrap':[True,False],
-                    'class_weight': [None, 'balanced', {0: 1, 1: 3}, {0: 1, 1: 5}]
+                    'n_estimators':[50],
+                    'max_depth':[20],
+                    'min_samples_split':[2],
+                    'min_samples_leaf':[1],
+                    'bootstrap':[True],
+                    'class_weight': [{0:1, 1: 10}]
+                }
+                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                model = RandomForestClassifier(random_state=42)
+                gs = GridSearchCV(model, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1, verbose=1)
+                gs.fit(Xp, yp)
+                return gs.best_estimator_
+
+            def tactic_grid_search_rf(Xp, yp):
+                param_grid = {
+                    'n_estimators':[50],
+                    'max_depth':[25],
+                    'min_samples_split':[2],
+                    'min_samples_leaf':[1],
+                    'bootstrap':[True],
+                    'class_weight': [{0:1, 1: 20}]
                 }
                 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
                 model = RandomForestClassifier(random_state=42)
@@ -858,7 +891,7 @@ class MILOTIC:
 
             # Label model
             print("Training Label Model...")
-            label_model = grid_search_rf(X_sel, y_label)
+            label_model = label_grid_search_rf(X_sel, y_label)
             label_metrics = evaluate_model(label_model, X_sel, y_label, "Label Model")
             label_model_path = os.path.join(self.sModelOutputDir, "label_model.joblib")
             joblib.dump(label_model, label_model_path)
@@ -866,7 +899,7 @@ class MILOTIC:
 
             # Defense
             print("Training Defense Evasion Model...")
-            defense_model = grid_search_rf(X_sel, y_defense)
+            defense_model = tactic_grid_search_rf(X_sel, y_defense)
             defense_metrics = evaluate_model(defense_model, X_sel, y_defense, "Defense Evasion Model")
             defense_model_path = os.path.join(self.sModelOutputDir, "defense_model.joblib")
             joblib.dump(defense_model, defense_model_path)
@@ -874,7 +907,7 @@ class MILOTIC:
 
             # Persistence
             print("Training Persistence Model...")
-            persistence_model = grid_search_rf(X_sel, y_persist)
+            persistence_model = tactic_grid_search_rf(X_sel, y_persist)
             persist_metrics = evaluate_model(persistence_model, X_sel, y_persist, "Persistence Model")
             persist_model_path = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
             joblib.dump(persistence_model, persist_model_path)
