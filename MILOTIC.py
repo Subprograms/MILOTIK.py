@@ -1,6 +1,6 @@
 import os
 import tkinter as tk
-import pandas as pd
+import pandas as pd, chardet
 import numpy as np
 import joblib
 import re
@@ -12,7 +12,7 @@ from regipy import RegistryHive
 from datetime import datetime
 
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
-from sklearn.ensemble import RandomForestClassifier
+from imblearn.ensemble import BalancedRandomForestClassifier
 from sklearn.model_selection import (
     train_test_split, GridSearchCV, StratifiedKFold
 )
@@ -184,33 +184,85 @@ class MILOTIC:
         messagebox.showinfo("Path Set", f"Persistence model set to: {self.sPersistenceModelPath}")
 
     ###########################################################################
+    #                          CSV READER
+    ###########################################################################
+    def safe_read_csv(self, path):
+        """
+        Read a CSV file with encoding detection and fallback for bad lines.
+        """
+        import chardet
+        import pandas as pd
+
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"CSV not found: {path}")
+
+        with open(path, "rb") as f:
+            raw = f.read(10000)
+            enc = chardet.detect(raw)["encoding"] or "utf-8"
+
+        return pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False, on_bad_lines="skip")
+       
+    # def read_csv_with_fallbacks(path):
+    #    """
+    #    For classifyCSV
+    #    """
+    #    raw = open(path, "rb").read(10000)
+    #    enc = chardet.detect(raw)["encoding"] or "utf-8"
+    #    df = pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False)
+    #    return self.clean_dataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
+
+    ###########################################################################
     #                          MAKE DATASET
     ###########################################################################
+    def clean_dataframe(self, df, drop_all_zero_rows=True, preserve_labels=True):
+        """
+        Clean a DataFrame by:
+        - Replacing non-printable characters
+        - Filling blanks/NaNs with "0"
+        - Dropping rows that are all "0", unless malicious or tagged
+        """
+
+        def clean_text(v):
+            if pd.isna(v) or v == "":
+                return "0"
+            if isinstance(v, bytes):
+                try:
+                    return v.decode("utf-8", errors="replace")
+                except:
+                    return "0"
+            if isinstance(v, str):
+                s = re.sub(r"[^\x20-\x7E]", "", v)
+                return s.strip() or "0"
+            return str(v)
+
+        # Clean each column
+        for c in df.columns:
+            df[c] = df[c].apply(clean_text)
+
+        # Fill blanks and NaNs
+        df.replace("", "0", inplace=True)
+        df.fillna("0", inplace=True)
+
+        # Drop all-zero rows, except if malicious/tagged
+        if drop_all_zero_rows:
+            all_zero_mask = df.eq("0").all(axis=1)
+            if preserve_labels and 'Label' in df.columns:
+                keep_mask = df['Label'].eq("Malicious")
+                if 'Tactic' in df.columns:
+                    keep_mask |= df['Tactic'].ne("None")
+                drop_mask = all_zero_mask & ~keep_mask
+                df = df.loc[~drop_mask]
+            else:
+                df = df.loc[~all_zero_mask]
+
+        return df
+    
     def parseRegistry(self, hive_path):
         """
         Parse the registry hive into raw columns and clean the result.
         """
         import pandas as pd, re
         from regipy import RegistryHive
-
-        def clean_dataframe(df, drop_all_zero_rows=True):
-            def clean_text(v):
-                if pd.isna(v) or v == "": return "0"
-                if isinstance(v, bytes):
-                    try: return v.decode("utf-8", errors="replace")
-                    except: return "0"
-                if isinstance(v, str):
-                    s = re.sub(r"[^\x20-\x7E]", "", v)
-                    return s.strip() or "0"
-                return str(v)
-
-            for c in df.columns:
-                df[c] = df[c].apply(clean_text)
-            df.replace("", "0", inplace=True)
-            df.fillna("0", inplace=True)
-            if drop_all_zero_rows:
-                df = df[~df.eq("0").all(axis=1)]
-            return df
 
         xData, subkey_counts = [], {}
         hive = RegistryHive(hive_path)
@@ -244,64 +296,71 @@ class MILOTIC:
                     })
 
         df = pd.DataFrame(xData)
-        return clean_dataframe(df)
+        return self.clean_dataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
         
     def makeDataset(self):
         """
-        Parses registry data, applies labels, and prepares the dataset.
-        - Cleans data and sets unparsable values to '0'
-        - Keeps columns even if they're all zero
-        - If any row is entirely '0', we drop that row
-        - Then saves/updates the training CSV
+        Parses registry hive or loads raw CSV, applies labels, forces any tagged-as-tactic
+        benign rows to Malicious, then preprocesses and saves the datasets.
         """
         try:
-            if not os.path.exists(self.sHivePath):
-                raise FileNotFoundError("Hive path not found.")
+            # 1) Load source data: hive or raw CSV
+            if self.sHivePath and os.path.exists(self.sHivePath):
+                print("Parsing registry hive...")
+                df_raw = self.parseRegistry(self.sHivePath)
+            elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
+                print("Loading raw parsed CSV...")
+                df_raw = pd.read_csv(self.sRawParsedCsvPath, dtype=str, low_memory=False)
+            else:
+                raise FileNotFoundError("No valid Hive Path or Raw Parsed CSV provided.")
 
-            print("Parsing registry data...")
-            df_raw = self.parseRegistry(self.sHivePath)
+            df_raw = self.clean_dataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
 
+            # 3) Apply your labeling logic
             print("Applying labels...")
             df_labeled = self.applyLabels(df_raw)
 
-            # Save or append raw-labeled data
+            # 4) Force any tagged-as-tactic benign rows to Malicious
+            mask = (df_labeled['Tactic'] != 'None') & (df_labeled['Label'] == 'Benign')
+            n_forced = mask.sum()
+            if n_forced:
+                print(f"Forcing {n_forced} tagged rows from Benign→Malicious")
+                df_labeled.loc[mask, 'Label'] = 'Malicious'
+
+            # 5) Save or append raw-labeled CSV
             if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 self.appendToExistingCsv(df_labeled, self.sRawParsedCsvPath)
                 print(f"Appended raw-labeled data to: {self.sRawParsedCsvPath}")
             else:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_raw_path = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
-                df_labeled.to_csv(new_raw_path, index=False)
-                self.sRawParsedCsvPath = new_raw_path
+                new_raw = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
+                df_labeled.to_csv(new_raw, index=False)
+                self.sRawParsedCsvPath = new_raw
+                print(f"Created new raw-labeled CSV: {new_raw}")
                 self.rawParsedCsvInput.delete(0, "end")
-                self.rawParsedCsvInput.insert(0, new_raw_path)
-                print(f"Created new raw-labeled CSV: {new_raw_path}")
+                self.rawParsedCsvInput.insert(0, new_raw)
 
-            # Preprocess data for training
+            # 6) Preprocess & feature-engineer
             print("Preprocessing for training dataset...")
             df_preproc = self.preprocessData(df_labeled)
 
-            # Select training columns
+            # 7) Select only training columns
             final_cols = self.selectTrainingColumns(df_preproc)
             df_preproc = df_preproc[final_cols]
 
-            # Fill NaN or blank with '0'
+            # 8) Fill blanks/NaN and save training dataset
             df_preproc.replace("", "0", inplace=True)
             df_preproc.fillna("0", inplace=True)
-
-            # Save or append to training dataset
             if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
                 self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
                 print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
             else:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_train_path = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
-                df_preproc.to_csv(new_train_path, index=False)
-                self.sTrainingDatasetPath = new_train_path
-                self.trainingDatasetInput.delete(0, "end")
-                self.trainingDatasetInput.insert(0, new_train_path)
-                print(f"Created new training dataset: {new_train_path}")
-                messagebox.showinfo("Dataset Created", f"New training dataset: {new_train_path}")
+                new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
+                df_preproc.to_csv(new_train, index=False)
+                self.sTrainingDatasetPath = new_train
+                print(f"Created new training dataset: {new_train}")
+                messagebox.showinfo("Dataset Created", f"New training dataset: {new_train}")
 
         except Exception as e:
             msg = f"Error in makeDataset: {e}"
@@ -391,79 +450,83 @@ class MILOTIC:
     #                          APPLY LABELS
     ###########################################################################
     def applyLabels(self, df):
-        """Add 'Label','Tactic' to raw. Keep 'Key'. """
+        """
+        Apply or preserve labels and tactics for registry data
+        
+        - Keeps existing 'Malicious' and non-'None' tactics unchanged.
+        - Otherwise, labels and tags based on provided .txt files.
+        """
+
         if 'Key' not in df.columns:
             raise KeyError("No 'Key' column in data for labeling.")
 
+        # Normalize existing Label and Tactic
+        df['Label'] = df.get('Label', 'Benign').fillna('Benign').astype(str).str.strip()
+        df['Tactic'] = df.get('Tactic', 'None').fillna('None').astype(str).str.strip()
+
         malicious_entries = []
         if self.sMaliciousKeysPath and os.path.exists(self.sMaliciousKeysPath):
-            with open(self.sMaliciousKeysPath,'r', encoding='utf-8') as f:
+            with open(self.sMaliciousKeysPath, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = [p.strip() for p in re.split(r'[\|;]', line.strip()) if p.strip()]
-                    entry = {
-                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
-                        "Name": parts[1].strip() if len(parts)>1 else None,
-                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                        "Type": parts[3].strip() if len(parts)>3 else None
-                    }
-                    malicious_entries.append(entry)
+                    malicious_entries.append({
+                        "Key":   parts[0] if len(parts) > 0 else None,
+                        "Name":  parts[1] if len(parts) > 1 else None,
+                        "Value": parts[2] if len(parts) > 2 else None,
+                        "Type":  parts[3] if len(parts) > 3 else None
+                    })
 
         tagged_entries = []
         if self.sTaggedKeysPath and os.path.exists(self.sTaggedKeysPath):
-            with open(self.sTaggedKeysPath,'r', encoding='utf-8') as f:
+            with open(self.sTaggedKeysPath, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = [p.strip() for p in re.split(r'[\,\|;]', line.strip()) if p.strip()]
-                    entry = {
-                        "Key": re.sub(r'\\+', r'\\', parts[0]) if len(parts)>0 else None,
-                        "Name": parts[1].strip() if len(parts)>1 else None,
-                        "Value": re.sub(r'\\+', r'\\', parts[2].strip()) if len(parts)>2 else None,
-                        "Type": parts[3].strip() if len(parts)>3 else None,
-                        "Tactic": parts[4].strip() if len(parts)>4 else "Persistence"
-                    }
-                    tagged_entries.append(entry)
+                    tagged_entries.append({
+                        "Key":    parts[0] if len(parts) > 0 else None,
+                        "Name":   parts[1] if len(parts) > 1 else None,
+                        "Value":  parts[2] if len(parts) > 2 else None,
+                        "Type":   parts[3] if len(parts) > 3 else None,
+                        "Tactic": parts[4] if len(parts) > 4 else "Persistence"
+                    })
 
+        # Matching helpers
         def is_malicious(row):
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-            row_name = str(row['Name']).lower().strip()
-            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-            row_type = str(row['Type']).lower().strip()
+            if row['Label'].strip().lower() == 'malicious':
+                return 'Malicious'
+
+            rk, rn, rv, rt = row['Key'].lower(), row.get('Name', '0').lower(), row.get('Value', '0').lower(), row.get('Type', '0').lower()
             for e in malicious_entries:
-                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
-                row_key_last = row_key.split('\\')[-1]
-                if row_key_last!=ekey_last:
-                    continue
-                if e['Name'] and row_name!=e['Name'].lower():
-                    continue
-                if e['Value'] and row_value!= e['Value'].lower():
-                    continue
-                if e['Type'] and row_type!= e['Type'].lower():
-                    continue
+                if not e['Key']: continue
+                if rk.split('\\')[-1] != e['Key'].lower().split('\\')[-1]: continue
+                if e['Name'] and rn != e['Name'].lower(): continue
+                if e['Value'] and rv != e['Value'].lower(): continue
+                if e['Type'] and rt != e['Type'].lower(): continue
                 return 'Malicious'
             return 'Benign'
 
         def assign_tactic(row):
-            row_key = re.sub(r'\\+', r'\\', str(row['Key']).lower())
-            row_name = str(row['Name']).lower().strip()
-            row_value = re.sub(r'\\+', r'\\', str(row['Value']).lower().strip())
-            row_type = str(row['Type']).lower().strip()
+            if row['Tactic'].strip().lower() != 'none':
+                return row['Tactic']
+
+            rk, rn, rv, rt = row['Key'].lower(), row.get('Name', '0').lower(), row.get('Value', '0').lower(), row.get('Type', '0').lower()
             for e in tagged_entries:
-                ekey_last = e['Key'].strip().split('\\')[-1].lower() if e['Key'] else ""
-                row_key_last = row_key.split('\\')[-1]
-                if row_key_last!=ekey_last:
-                    continue
-                if e['Name'] and row_name!=e['Name'].lower():
-                    continue
-                if e['Value'] and row_value!= e['Value'].lower():
-                    continue
-                if e['Type'] and row_type!= e['Type'].lower():
-                    continue
+                if not e['Key']: continue
+                if rk.split('\\')[-1] != e['Key'].lower().split('\\')[-1]: continue
+                if e['Name'] and rn != e['Name'].lower(): continue
+                if e['Value'] and rv != e['Value'].lower(): continue
+                if e['Type'] and rt != e['Type'].lower(): continue
                 return e['Tactic']
             return 'None'
 
-        df['Label'] = df.apply(is_malicious, axis=1)
-        df['Tactic'] = df.apply(assign_tactic, axis=1)
-        return df
+        # Apply only if not already labeled/tagged
+        df['Label'] = df.apply(lambda r: is_malicious(r) if r['Label'].strip().lower() != 'malicious' else r['Label'], axis=1)
+        df['Tactic'] = df.apply(lambda r: assign_tactic(r) if r['Tactic'].strip().lower() == 'none' else r['Tactic'], axis=1)
 
+        # if a tactic exists but label is 'Benign', upgrade to 'Malicious'
+        force_mask = (df['Label'].str.strip().str.lower() == 'benign') & (df['Tactic'].str.strip().str.lower() != 'none')
+        df.loc[force_mask, 'Label'] = 'Malicious'
+
+        return df
     ###########################################################################
     #                         PREPROCESS (NO RFE)
     ###########################################################################
@@ -560,38 +623,9 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        Read, clean, train models, then classify.
+        If a training dataset is provided, use it. Otherwise, preprocess raw parsed CSV.
+        Then, train models and classify. If no CSV to classify is provided, use the training dataset.
         """
-        import pandas as pd
-
-        def clean_dataframe(df, drop_all_zero_rows=True):
-            import re
-            def clean_text(v):
-                if pd.isna(v) or v == "": return "0"
-                if isinstance(v, bytes):
-                    try: return v.decode("utf-8", errors="replace")
-                    except: return "0"
-                if isinstance(v, str):
-                    s = re.sub(r"[^\x20-\x7E]", "", v)
-                    return s.strip() or "0"
-                return str(v)
-
-            for c in df.columns:
-                df[c] = df[c].apply(clean_text)
-            df.replace("", "0", inplace=True)
-            df.fillna("0", inplace=True)
-            if drop_all_zero_rows:
-                df = df[~df.eq("0").all(axis=1)]
-            return df
-
-        def safe_read_csv(path, sample_frac=0.2):
-            chunk_list = []
-            for chunk in pd.read_csv(path, dtype=str, low_memory=True,
-                                     on_bad_lines="skip", chunksize=20_000_000):
-                chunk_list.append(chunk.sample(frac=sample_frac, random_state=42))
-            df = pd.concat(chunk_list, ignore_index=True)
-            return clean_dataframe(df)
-
         def merge_duplicate_columns(df):
             if not df.columns.duplicated().any():
                 return df
@@ -603,33 +637,48 @@ class MILOTIC:
 
         def remove_non_training_columns(df):
             needed = {
-                "Key","Label","Tactic",
-                "Depth","Key Size","Subkey Count","Value Count","Value Processed",
-                *[f"PathCategory_{c}" for c in ["Startup Path","Service Path","Network Path","Other Path"]],
-                *[f"TypeGroup_{g}" for g in ["String","Numeric","Binary","Others"]],
+                "Key", "Label", "Tactic",
+                "Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed",
+                *[f"PathCategory_{c}" for c in ["Startup Path", "Service Path", "Network Path", "Other Path"]],
+                *[f"TypeGroup_{g}" for g in ["String", "Numeric", "Binary", "Others"]],
                 *[f"KeyNameCategory_{k}" for k in [
-                    "Run Keys","Service Keys","Security and Configuration Keys",
-                    "Internet and Network Keys","File Execution Keys","Other Keys"
+                    "Run Keys", "Service Keys", "Security and Configuration Keys",
+                    "Internet and Network Keys", "File Execution Keys", "Other Keys"
                 ]]
             }
             drop = [c for c in df.columns if c not in needed]
             return df.drop(columns=drop, errors="ignore")
 
         try:
-            if not self.sClassifyCsvPath:
-                self.sClassifyCsvPath = self.sTrainingDatasetPath
+            # Determine training dataset
+            if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
+                print("[ML] Using provided training dataset.")
+                df = self.safe_read_csv(self.sTrainingDatasetPath)
+            elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
+                print("[ML] No training dataset. Preprocessing raw parsed CSV...")
+                raw_df = self.safe_read_csv(self.sRawParsedCsvPath)
+                raw_df = self.clean_dataframe(raw_df, drop_all_zero_rows=True, preserve_labels=True)
+                df = self.preprocessData(raw_df)
+                df = df[self.selectTrainingColumns(df)]
+            else:
+                raise FileNotFoundError("No training dataset or raw parsed CSV found.")
 
-            # 1) load & clean training
-            df = safe_read_csv(self.sTrainingDatasetPath)
+            # Clean structure
             df = merge_duplicate_columns(df)
             df = remove_non_training_columns(df)
-            df = clean_dataframe(df)
+            df = self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
 
-            # 2) train & evaluate
+            # Set classify path fallback
+            if not self.sClassifyCsvPath or not os.path.exists(self.sClassifyCsvPath):
+                print("[ML] No classify CSV provided. Using training dataset for classification.")
+                self.sClassifyCsvPath = self.sTrainingDatasetPath
+
+            # Train & evaluate
             self.trainAndEvaluateModels(df)
 
-            # 3) classify
+            # Classify
             self.classifyCsv(self.sClassifyCsvPath)
+
             messagebox.showinfo("ML Process Complete", "Finished training & classification!")
 
         except Exception as e:
@@ -638,6 +687,52 @@ class MILOTIC:
     ###########################################################################
     #                TRAIN AND EVALUATE MODELS
     ###########################################################################
+    def label_grid_search_rf(self, Xp, yp):
+        """
+        Return a BalancedRandomForestClassifier tuned for the Label task.
+        """
+        param_grid = {
+            "n_estimators": [100],
+            "max_depth": [None, 20],
+            "min_samples_split": [2, 5],
+            "min_samples_leaf": [1, 2]
+        }
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
+        gs = GridSearchCV(
+            brf,
+            param_grid,
+            cv=cv,
+            scoring="roc_auc",
+            n_jobs=-1,
+            verbose=1
+        )
+        gs.fit(Xp, yp)
+        return gs.best_estimator_
+
+    def tactic_grid_search_rf(self, Xp, yp):
+        """
+        Return a BalancedRandomForestClassifier tuned for the Tactic tasks.
+        """
+        param_grid = {
+            "n_estimators": [100],
+            "max_depth": [None, 25],
+            "min_samples_split": [2, 5],
+            "min_samples_leaf": [1, 2]
+        }
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
+        gs = GridSearchCV(
+            brf,
+            param_grid,
+            cv=cv,
+            scoring="roc_auc",
+            n_jobs=-1,
+            verbose=1
+        )
+        gs.fit(Xp, yp)
+        return gs.best_estimator_
+
     def trainAndEvaluateModels(self, df):
         """
         3 RandomForest models: label, defense, persistence
@@ -683,27 +778,10 @@ class MILOTIC:
             y_persist.iloc[idx]=1
 
         # RFE
-        base_model = RandomForestClassifier(n_estimators=100, random_state=42)
+        base_model = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False,  n_estimators=100, random_state=42)
         rfe = RFE(estimator=base_model, n_features_to_select=10)
         rfe.fit(X_all, y_label)
         self.selected_features = X_all.columns[rfe.support_]
-
-        # Grid search functions
-        def label_grid_search_rf(Xp, yp):
-            param_grid = {'n_estimators':[50],'max_depth':[20],'min_samples_split':[2],'min_samples_leaf':[1],'bootstrap':[True],'class_weight': [{0:1, 1:10}]}
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            model = RandomForestClassifier(random_state=42)
-            gs = GridSearchCV(model, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1, verbose=1)
-            gs.fit(Xp, yp)
-            return gs.best_estimator_
-
-        def tactic_grid_search_rf(Xp, yp):
-            param_grid = {'n_estimators':[50],'max_depth':[25],'min_samples_split':[2],'min_samples_leaf':[1],'bootstrap':[True],'class_weight': [{0:1, 1:20}]}
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            model = RandomForestClassifier(random_state=42)
-            gs = GridSearchCV(model, param_grid, cv=cv, scoring='roc_auc', n_jobs=-1, verbose=1)
-            gs.fit(Xp, yp)
-            return gs.best_estimator_
 
         def evaluate_model(model, Xd, yd, label_name=""):
             X_tr, X_te, y_tr, y_te = train_test_split(Xd, yd, test_size=0.2, random_state=42, stratify=yd)
@@ -726,26 +804,29 @@ class MILOTIC:
 
         X_sel = X_all[self.selected_features].copy()
 
-        # Label model
-        label_model = label_grid_search_rf(X_sel, y_label)
-        label_metrics = evaluate_model(label_model, X_sel, y_label, "Label Model")
-        label_model_path = os.path.join(self.sModelOutputDir, "label_model.joblib")
-        joblib.dump(label_model, label_model_path)
-        self.sLabelModelPath = label_model_path
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Defense model
-        defense_model = tactic_grid_search_rf(X_sel, y_defense)
+        if not self.sLabelModelPath:
+            self.sLabelModelPath = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
+        if not self.sTacticModelPath:
+            self.sTacticModelPath = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
+        if not self.sPersistenceModelPath:
+            self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
+
+        # Label model
+        label_model = self.label_grid_search_rf(X_sel, y_label)
+        label_metrics = evaluate_model(label_model, X_sel, y_label, "Label Model")
+        joblib.dump(label_model, self.sLabelModelPath)
+
+        # Defense evasion model
+        defense_model = self.tactic_grid_search_rf(X_sel, y_defense)
         defense_metrics = evaluate_model(defense_model, X_sel, y_defense, "Defense Evasion Model")
-        defense_model_path = os.path.join(self.sModelOutputDir, "defense_model.joblib")
-        joblib.dump(defense_model, defense_model_path)
-        self.sTacticModelPath = defense_model_path
+        joblib.dump(defense_model, self.sTacticModelPath)
 
         # Persistence model
-        persistence_model = tactic_grid_search_rf(X_sel, y_persist)
+        persistence_model = self.tactic_grid_search_rf(X_sel, y_persist)
         persist_metrics = evaluate_model(persistence_model, X_sel, y_persist, "Persistence Model")
-        persist_model_path = os.path.join(self.sModelOutputDir, "persistence_model.joblib")
-        joblib.dump(persistence_model, persist_model_path)
-        self.sPersistenceModelPath = persist_model_path
+        joblib.dump(persistence_model, self.sPersistenceModelPath)
 
         # Metrics display
         combined = {} 
@@ -763,43 +844,53 @@ class MILOTIC:
     ###########################################################################
     def classifyCsv(self, csv_path: str):
         """
-        Read fallback CSV, then predict & save.
+        Read fallback CSV (raw or training), preprocess if needed,
+        apply trained models, and save predictions.
         """
-        import pandas as pd, chardet
-
-        def clean_dataframe(df, drop_all_zero_rows=True):
-            import re
-            def clean_text(v):
-                if pd.isna(v) or v == "": return "0"
-                if isinstance(v, bytes):
-                    try: return v.decode("utf-8", errors="replace")
-                    except: return "0"
-                if isinstance(v, str):
-                    s = re.sub(r"[^\x20-\x7E]", "", v)
-                    return s.strip() or "0"
-                return str(v)
-
-            for c in df.columns:
-                df[c] = df[c].apply(clean_text)
-            df.replace("", "0", inplace=True)
-            df.fillna("0", inplace=True)
-            if drop_all_zero_rows:
-                df = df[~df.eq("0").all(axis=1)]
-            return df
-
-        def read_csv_with_fallbacks(path):
-            raw = open(path, "rb").read(10000)
-            enc = chardet.detect(raw)["encoding"] or "utf-8"
-            df = pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False)
-            return clean_dataframe(df)
-
         try:
-            df = read_csv_with_fallbacks(csv_path)
-            if df.empty:
-                raise ValueError("No data to classify.")
-            if "Key" not in df.columns:
-                df["Key"] = "UNKNOWN"
-            # …rest of classification logic unchanged…
+            df = self.safe_read_csv(csv_path)
+
+            # Check if it is raw data that needs preprocessing
+            if 'Type' in df.columns and 'Key' in df.columns and 'Name' in df.columns:
+                df = self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
+                df = self.preprocessData(df)
+                df = df[self.selectTrainingColumns(df)]
+            else:
+                # Already preprocessed training-format CSV
+                df = self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
+
+            # Load models
+            if not all([
+                self.sLabelModelPath and os.path.exists(self.sLabelModelPath),
+                self.sTacticModelPath and os.path.exists(self.sTacticModelPath),
+                self.sPersistenceModelPath and os.path.exists(self.sPersistenceModelPath)
+            ]):
+                raise FileNotFoundError("One or more trained models not found.")
+
+            model_label = joblib.load(self.sLabelModelPath)
+            model_defense = joblib.load(self.sTacticModelPath)
+            model_persist = joblib.load(self.sPersistenceModelPath)
+
+            # Use RFE-selected features only
+            if self.selected_features is None:
+                raise ValueError("Selected features from RFE are missing.")
+            
+            df_sel = df[self.selected_features].copy()
+            for col in df_sel.columns:
+                df_sel[col] = pd.to_numeric(df_sel[col], errors='coerce').fillna(0)
+
+            # Predict
+            df['Predicted_Label'] = model_label.predict(df_sel)
+            df['Predicted_Tactic_Defense'] = model_defense.predict(df_sel)
+            df['Predicted_Tactic_Persistence'] = model_persist.predict(df_sel)
+
+            # Save
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = os.path.join(self.sModelOutputDir, f"classified_output_{ts}.csv")
+            df.to_csv(output_path, index=False)
+            print(f"Saved classified output to: {output_path}")
+            messagebox.showinfo("Classification Complete", f"Results saved to:\n{output_path}")
+
         except Exception as e:
             messagebox.showerror("Classification error", str(e))
 
