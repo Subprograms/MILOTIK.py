@@ -681,12 +681,20 @@ class MILOTIC:
         Otherwise, run the full train-then-classify pipeline.
         """
         try:
-            # -- 0) classify-only short-circuit ---------------------------
             models_ready = all([
                 self.sLabelModelPath       and os.path.exists(self.sLabelModelPath),
                 self.sTacticModelPath      and os.path.exists(self.sTacticModelPath),
                 self.sPersistenceModelPath and os.path.exists(self.sPersistenceModelPath)
             ])
+            classify_ready = self.sClassifyCsvPath and os.path.exists(self.sClassifyCsvPath)
+
+            # ---------- classify-only path -----------------------------
+            if models_ready and classify_ready:
+                print("[ML] Pre-trained models detected – skipping training.")
+                self.classifyCsv(self.sClassifyCsvPath)
+                messagebox.showinfo("ML Process Complete", "Classification finished!")
+                return
+                
             classify_ready = self.sClassifyCsvPath and os.path.exists(self.sClassifyCsvPath)
 
             if models_ready and classify_ready:
@@ -962,66 +970,95 @@ class MILOTIC:
     ###########################################################################
     def classifyCsv(self, csv_path: str):
         """
-        Preprocess the input CSV if needed, apply the three models,
-        and save predictions.  If self.selected_features is missing,
-        it is inferred from the label model's `feature_names_in_`.
+        1. Load a CSV (raw or pre-processed)
+        2. Ensure every column used during training is present
+           – missing → add with zeros
+        3. Hand a *NumPy array* (no column names) to the three models
+        4. Write predictions + (optionally) metrics, update GUI
         """
         try:
+            # =================== 1. load & (optionally) preprocess ===================
             df = self.safe_read_csv(csv_path)
 
-            # -------- raw-versus-training detection --------------------
-            if {'Key', 'Name', 'Type'}.issubset(df.columns):
+            if {"Key", "Name", "Type"}.issubset(df.columns):
+                # raw registry export  → preprocess first
                 df = self.clean_dataframe(df, drop_all_zero_rows=True,
                                           preserve_labels=True)
                 df = self.preprocessData(df)
                 df = df[self.selectTrainingColumns(df)]
             else:
+                # already pre-processed
                 df = self.clean_dataframe(df, drop_all_zero_rows=True,
                                           preserve_labels=True)
 
-            # -------- load models --------------------------------------
-            if not all([
-                self.sLabelModelPath       and os.path.exists(self.sLabelModelPath),
-                self.sTacticModelPath      and os.path.exists(self.sTacticModelPath),
-                self.sPersistenceModelPath and os.path.exists(self.sPersistenceModelPath)
-            ]):
-                raise FileNotFoundError("One or more trained models not found.")
-
+            # =================== 2. models + feature list ===================
             model_label   = joblib.load(self.sLabelModelPath)
             model_defense = joblib.load(self.sTacticModelPath)
             model_persist = joblib.load(self.sPersistenceModelPath)
 
-            # -------- ensure we have the feature list ------------------
-            if self.selected_features is None:
-                if hasattr(model_label, "feature_names_in_"):
-                    self.selected_features = list(model_label.feature_names_in_)
-                    print(f"[ML] Feature list recovered from model.")
-                else:
-                    raise RuntimeError(
-                        "selected_features list is missing and "
-                        "model lacks feature_names_in_."
-                    )
+            if self.selected_features is None or len(self.selected_features) == 0:
+                self.selected_features = list(model_label.feature_names_in_)
 
-            # -------- align & predict ---------------------------------
-            df_sel = df[self.selected_features].copy()
-            for col in df_sel.columns:
-                df_sel[col] = pd.to_numeric(df_sel[col], errors='coerce').fillna(0)
+            # make sure every expected column exists (add missing → 0)
+            for col in self.selected_features:
+                if col not in df.columns:
+                    df[col] = 0
 
-            df['Predicted_Label']            = model_label.predict(df_sel)
-            df['Predicted_Tactic_Defense']   = model_defense.predict(df_sel)
-            df['Predicted_Tactic_Persistence'] = model_persist.predict(df_sel)
+            # strict ordering, numeric coercion, THEN → NumPy
+            X_np = (
+                df[self.selected_features]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0)
+                .to_numpy()
+            )
+            
+            expected = int(model_label.n_features_in_)  # how wide the forest expects
 
-            # -------- save ---------------------------------------------
+            if X_np.shape[1] < expected:
+                zeros = np.zeros((X_np.shape[0], expected - X_np.shape[1]))
+                X_np   = np.hstack([X_np, zeros])
+
+            elif X_np.shape[1] > expected:
+                X_np = X_np[:, :expected]
+
+            # =================== 3. prediction ===================
+            df["Pred_Label"]   = model_label.predict(X_np)
+            df["Pred_Defense"] = model_defense.predict(X_np)
+            df["Pred_Persist"] = model_persist.predict(X_np)
+
+            # =================== 4. optional evaluation ===================
+            metrics = {}
+            if {"Label", "Tactic"}.issubset(df.columns):
+                metrics |= self._evaluate_predictions(
+                    df["Label"].eq("Malicious").astype(int),
+                    df["Pred_Label"], "Label")
+                metrics |= self._evaluate_predictions(
+                    df["Tactic"].eq("Defense Evasion").astype(int),
+                    df["Pred_Defense"], "Defense")
+                metrics |= self._evaluate_predictions(
+                    df["Tactic"].eq("Persistence").astype(int),
+                    df["Pred_Persist"], "Persistence")
+                self.updateMetricsDisplay(metrics)
+
+            # =================== 5. save output ===================
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(self.sModelOutputDir,
                                     f"classified_output_{ts}.csv")
             df.to_csv(out_path, index=False)
-            print(f"[ML] Saved classified output -> {out_path}")
+            print(f"[ML] Saved classified output → {out_path}")
             messagebox.showinfo("Classification Complete",
                                 f"Results saved to:\n{out_path}")
 
-        except Exception as e:
-            messagebox.showerror("Classification error", str(e))
+        except Exception as exc:
+            messagebox.showerror("Classification error", str(exc))
+            
+    def _evaluate_predictions(self, y_true, y_pred, tag):
+        return {
+            f"{tag} Accuracy":  f"{accuracy_score(y_true, y_pred):.4f}",
+            f"{tag} Precision": f"{precision_score(y_true, y_pred, zero_division=0):.4f}",
+            f"{tag} Recall":    f"{recall_score(y_true, y_pred, zero_division=0):.4f}",
+            f"{tag} F1":        f"{f1_score(y_true, y_pred, zero_division=0):.4f}",
+        }
 
     ###########################################################################
     #                       UPDATING
