@@ -814,97 +814,6 @@ class MILOTIC:
         )
         gs.fit(Xp, yp)
         return gs.best_estimator_
-
-
-    # ----------------------------------------------------------------------
-    # 3.  trainAndEvaluateModels
-    # ----------------------------------------------------------------------
-    def trainAndEvaluateModels(self, df):
-        """
-        Train three Balanced-Random-Forest models, evaluate on an 80/20 split,
-        save the models and the list of RFE-selected features.
-        """
-        if df.empty:
-            raise ValueError("Training dataset is empty")
-
-        # -- numeric conversion ------------------------------------------
-        for c in ['Depth', 'Key Size', 'Subkey Count',
-                  'Value Count', 'Value Processed']:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-
-        # -- feature / target split --------------------------------------
-        non_feat = ['Key', 'Name', 'Value', 'Label', 'Tactic',
-                    'Type', 'Type Group', 'Key Name Category', 'Path Category']
-        X_all = df.drop(columns=[c for c in non_feat if c in df], errors='ignore')
-        X_all = X_all.apply(pd.to_numeric, errors='coerce').fillna(0)
-
-        y_label   = (df['Label']  == 'Malicious').astype(int)
-        y_defense = (df['Tactic'] == 'Defense Evasion').astype(int)
-        y_persist = (df['Tactic'] == 'Persistence').astype(int)
-
-        # balance single-class targets
-        for y in (y_label, y_defense, y_persist):
-            if y.nunique() < 2:
-                idx = np.random.choice(y.index, size=int(len(y)*0.3), replace=False)
-                y.iloc[idx] = 1
-
-        # -- RFE with replacement=True to silence warning ----------------
-        rfe_base = BalancedRandomForestClassifier(
-            sampling_strategy='all', replacement=True,  #  ← fixed
-            bootstrap=False, n_estimators=100, random_state=42
-        )
-        rfe = RFE(rfe_base, n_features_to_select=10)
-        rfe.fit(X_all, y_label)
-        self.selected_features = X_all.columns[rfe.support_]
-        X_sel = X_all[self.selected_features]
-
-        # -- train models ------------------------------------------------
-        label_model   = self.label_grid_search_rf(X_sel, y_label)
-        defense_model = self.tactic_grid_search_rf(X_sel, y_defense)
-        persist_model = self.tactic_grid_search_rf(X_sel, y_persist)
-
-        # -- evaluate on 20 % hold-out ----------------------------------
-        def evaluate(m, X, y, tag):
-            X_tr, X_te, y_tr, y_te = train_test_split(
-                X, y, test_size=0.20, stratify=y, random_state=42
-            )
-            m.fit(X_tr, y_tr)
-            y_pred   = m.predict(X_te)
-            y_scores = m.predict_proba(X_te)[:, 1] if hasattr(m, "predict_proba") else None
-            return {
-                f"{tag} Accuracy":  accuracy_score(y_te, y_pred),
-                f"{tag} Precision": precision_score(y_te, y_pred, zero_division=0),
-                f"{tag} Recall":    recall_score(y_te, y_pred, zero_division=0),
-                f"{tag} F1":        f1_score(y_te, y_pred,  zero_division=0),
-                f"{tag} AUC":       (roc_auc_score(y_te, y_scores)
-                                     if y_scores is not None and y_te.nunique()>1 else 0.0)
-            }
-
-        label_metrics   = evaluate(label_model,   X_sel, y_label,   "Label Model")
-        defense_metrics = evaluate(defense_model, X_sel, y_defense, "Defense Model")
-        persist_metrics = evaluate(persist_model, X_sel, y_persist, "Persistence Model")
-
-        # -- save models -------------------------------------------------
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
-        self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
-        self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-        joblib.dump(label_model,   self.sLabelModelPath)
-        joblib.dump(defense_model, self.sTacticModelPath)
-        joblib.dump(persist_model, self.sPersistenceModelPath)
-
-        # -- persist feature list ---------------------------------------
-        feat_path = os.path.join(self.sModelOutputDir, "selected_features.txt")
-        with open(feat_path, "w", encoding="utf-8") as fh:
-            for f in self.selected_features:
-                fh.write(f + "\n")
-        print(f"[INFO] Selected-feature list saved -> {feat_path}")
-
-        # -- update GUI tables ------------------------------------------
-        combined = {label_metrics, defense_metrics, persist_metrics}
-        self.updateMetricsDisplay({k: f"{v:.4f}" for k, v in combined.items()})
-        self.updateFeatureDisplay(label_model.feature_importances_, self.selected_features)
             
     ###########################################################################
     #                TRAIN AND EVALUATE MODELS
@@ -954,97 +863,99 @@ class MILOTIC:
         )
         gs.fit(Xp, yp)
         return gs.best_estimator_
-
+    
     def trainAndEvaluateModels(self, df):
-        """
-        Train three Balanced-RF models, evaluate, display metrics,
-        and save the list of RFE-selected features so it can be
-        re-loaded for classification-only runs.
-        """
         if df.empty:
             raise ValueError("Training dataset is empty")
 
-        # ---------- preprocessing identical to your original ----------
-        for c in ['Depth', 'Key Size', 'Subkey Count',
-                  'Value Count', 'Value Processed']:
+        for c in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-        non_feat = ['Key', 'Name', 'Value', 'Label', 'Tactic',
-                    'Type', 'Type Group', 'Key Name Category', 'Path Category']
-        X_all = df.drop(columns=[c for c in non_feat if c in df], errors='ignore')
-        X_all = X_all.apply(pd.to_numeric, errors='coerce').fillna(0)
+        non_feat = ["Key", "Name", "Value", "Label", "Tactic",
+                    "Type", "Type Group", "Key Name Category", "Path Category"]
+        X_all = df.drop(columns=[c for c in non_feat if c in df], errors="ignore")
+        X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        y_label   = (df['Label']   == 'Malicious').astype(int)
-        y_defense = (df['Tactic'] == 'Defense Evasion').astype(int)
-        y_persist = (df['Tactic'] == 'Persistence').astype(int)
+        y_lbl = (df["Label"] == "Malicious").astype(int)
+        y_def = (df["Tactic"] == "Defense Evasion").astype(int)
+        y_per = (df["Tactic"] == "Persistence").astype(int)
 
-        for y in (y_label, y_defense, y_persist):
+        for y in (y_lbl, y_def, y_per):
             if y.nunique() < 2:
-                idx = np.random.choice(y.index, size=int(len(y)*0.3), replace=False)
+                idx = np.random.choice(y.index, size=int(len(y) * 0.3), replace=False)
                 y.iloc[idx] = 1
 
-        # ---------- RFE ------------------------------
-        rfe_base = BalancedRandomForestClassifier(
-            sampling_strategy='all', bootstrap=False,
-            n_estimators=100, random_state=42
+        X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
+            X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
-        rfe = RFE(rfe_base, n_features_to_select=10)
-        rfe.fit(X_all, y_label)
-        self.selected_features = X_all.columns[rfe.support_]
-        X_sel = X_all[self.selected_features]
+        y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
+        y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # ---------- train three models -------------------------------
-        label_model   = self.label_grid_search_rf(X_sel, y_label)
-        defense_model = self.tactic_grid_search_rf(X_sel, y_defense)
-        persist_model = self.tactic_grid_search_rf(X_sel, y_persist)
+        rfe = RFE(
+            BalancedRandomForestClassifier(
+                sampling_strategy="all",
+                replacement=True,
+                bootstrap=False,
+                n_estimators=100,
+                random_state=42,
+            ),
+            n_features_to_select=10,
+        )
+        rfe.fit(X_tr, y_lbl_tr)
+        self.selected_features = X_tr.columns[rfe.support_]
 
-        # ---------- 20 % hold-out for testing unseen data -------------------------
-        def evaluate_model(model, X, y, tag):
-            X_tr, X_te, y_tr, y_te = train_test_split(
-                X, y, test_size=0.20, stratify=y, random_state=42
+        X_tr_sel = X_tr[self.selected_features]
+        X_te_sel = X_te[self.selected_features]
+
+        def build_model():
+            return BalancedRandomForestClassifier(
+                sampling_strategy="all",
+                replacement=True,
+                bootstrap=False,
+                n_estimators=400,
+                max_depth=None,
+                random_state=42,
             )
-            model.fit(X_tr, y_tr)
-            y_pred   = model.predict(X_te)
-            y_scores = (model.predict_proba(X_te)[:, 1]
-                        if hasattr(model, "predict_proba") else None)
 
+        label_model = build_model().fit(X_tr_sel, y_lbl_tr)
+        defense_model = build_model().fit(X_tr_sel, y_def_tr)
+        persistence_model = build_model().fit(X_tr_sel, y_per_tr)
+
+        def metrics(m, X, y):
+            y_pred = m.predict(X)
+            y_prob = m.predict_proba(X)[:, 1]
             return {
-                f"{tag} Accuracy":  accuracy_score(y_te, y_pred),
-                f"{tag} Precision": precision_score(y_te, y_pred, zero_division=0),
-                f"{tag} Recall":    recall_score(y_te, y_pred, zero_division=0),
-                f"{tag} F1":        f1_score(y_te, y_pred,  zero_division=0),
-                f"{tag} AUC":       (roc_auc_score(y_te, y_scores)
-                                     if y_scores is not None and y_te.nunique() > 1 else 0.0)
+                "Accuracy": accuracy_score(y, y_pred),
+                "Precision": precision_score(y, y_pred, zero_division=0),
+                "Recall": recall_score(y, y_pred, zero_division=0),
+                "F1": f1_score(y, y_pred, zero_division=0),
+                "AUC": roc_auc_score(y, y_prob) if y.nunique() > 1 else 0.0,
             }
 
-        try:
-            label_metrics   = evaluate_model(label_model,   X_sel, y_label,   "Label Model")
-            defense_metrics = evaluate_model(defense_model, X_sel, y_defense, "Defense Model")
-            persist_metrics = evaluate_model(persist_model, X_sel, y_persist, "Persistence Model")
-        except Exception as eval_err:
-            print(f"[WARN] Metric evaluation failed: {eval_err}")
-            label_metrics = defense_metrics = persist_metrics = {}
+        all_metrics = {}
+        for tag, model, X, y in [
+            ("Label", label_model, X_te_sel, y_lbl_te),
+            ("Defense", defense_model, X_te_sel, y_def_te),
+            ("Persistence", persistence_model, X_te_sel, y_per_te),
+        ]:
+            for k, v in metrics(model, X, y).items():
+                all_metrics[f"{tag} {k}"] = f"{v:.4f}"
 
-        # ---------- persist models -----------------------------------
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
-        self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
+        self.sLabelModelPath = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
+        self.sTacticModelPath = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-        joblib.dump(label_model,   self.sLabelModelPath)
+        joblib.dump(label_model, self.sLabelModelPath)
         joblib.dump(defense_model, self.sTacticModelPath)
-        joblib.dump(persist_model, self.sPersistenceModelPath)
+        joblib.dump(persistence_model, self.sPersistenceModelPath)
 
-        # ---------- save feature list --------------------------------
-        feat_path = os.path.join(self.sModelOutputDir, "selected_features.txt")
-        with open(feat_path, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(self.selected_features))
-        print(f"[INFO] Selected-feature list saved -> {feat_path}")
+        with open(os.path.join(self.sModelOutputDir, "selected_features.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(self.selected_features))
 
-        # ---------- update GUI tables --------------------------------
-        combined = {**label_metrics, **defense_metrics, **persist_metrics}
-        self.updateMetricsDisplay({k: f"{v:.4f}" for k, v in combined.items()})
+        self.updateMetricsDisplay(all_metrics)
         self.updateFeatureDisplay(label_model.feature_importances_, self.selected_features)
+
     
     ###########################################################################
     #                    CLASSIFY CSV
