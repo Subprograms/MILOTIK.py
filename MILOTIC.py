@@ -1241,30 +1241,29 @@ class MILOTIC:
             self.metricsList.insert("", "end", values=(metric, val))
                 
     def updateFeatureDisplay(self,
-                            lbl_feats, lbl_imps,
-                            def_feats, def_imps,
-                            per_feats, per_imps):
+                             lbl_feats, lbl_imps,
+                             def_feats, def_imps,
+                             per_feats, per_imps):
         """
         Populate the three tabs with feature importances for
         Label, Defense-Evasion, and Persistence models.
         """
+
         # clear all three trees
-        for tv in self.featureTrees.values():
+        for tv in self.featureTabsTabs.values():
             tv.delete(*tv.get_children())
 
         # Label tab
-        for f,imp in sorted(zip(lbl_feats, lbl_imps), key=lambda x: x[1], reverse=True):
-            self.featureTrees["Label"].insert("", "end", values=(f, f"{imp:.4f}"))
+        for f, imp in sorted(zip(lbl_feats, lbl_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Label"].insert("", "end", values=(f, f"{imp:.4f}"))
 
         # Defense-Evasion tab
-        for f,imp in sorted(zip(def_feats, def_imps), key=lambda x: x[1], reverse=True):
-            self.featureTrees["Defense"].insert("", "end", values=(f, f"{imp:.4f}"))
+        for f, imp in sorted(zip(def_feats, def_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Defense"].insert("", "end", values=(f, f"{imp:.4f}"))
 
         # Persistence tab
-        for f,imp in sorted(zip(per_feats, per_imps), key=lambda x: x[1], reverse=True):
-            self.featureTrees["Persistence"].insert("", "end", values=(f, f"{imp:.4f}"))
-
-
+        for f, imp in sorted(zip(per_feats, per_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Persistence"].insert("", "end", values=(f, f"{imp:.4f}"))
 
 ###########################################################################
 #                       MAIN
