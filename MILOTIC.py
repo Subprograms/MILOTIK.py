@@ -1252,7 +1252,7 @@ class MILOTIC:
 
         # Persistence tab
         for f, imp in sorted(zip(per_feats, per_imps), key=lambda x: x[1], reverse=True):
-            self.featureTabsTabs["Persistence"].insert("", "end", values=(f, f"{imp:.4f}")){imp:.4f}"))
+            self.featureTabsTabs["Persistence"].insert("", "end", values=(f, f"{imp:.4f}"))
 
 
 ###########################################################################
