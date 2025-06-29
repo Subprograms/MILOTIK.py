@@ -872,11 +872,25 @@ class MILOTIC:
     ###########################################################################
     #            TRAIN AND EVALUATE MODELS
     ###########################################################################
+    @staticmethod
+    def optimalThreshold(y_true, y_score):
+        """
+        Given true binary labels and predicted scores, find the threshold
+        on the ROC curve closest to the top-left (0,1) point.
+        """
+        from sklearn.metrics import roc_curve
+        import numpy as np
+
+        fpr, tpr, thr = roc_curve(y_true, y_score)
+        dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
+        return thr[np.argmin(dist)]
+    
     def trainAndEvaluateModels(self, df):
         """
         RFE -> top-N features
         train three BRF models
         evaluate & push metrics to GUI
+        compute and store optimal ROC thresholds
         dump .joblib models
         """
         if df.empty:
@@ -895,7 +909,7 @@ class MILOTIC:
         X_all = df.drop(columns=[c for c in non_feat if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        # 3) ENSURE every dummy column is present
+        # 3) ensure every dummy column is present
         PATH_CATS = ["Startup Path", "Service Path", "Network Path", "Other Path"]
         TYPE_GRP  = ["String", "Numeric", "Binary", "Others"]
         KEYNAME_C = [
@@ -947,8 +961,7 @@ class MILOTIC:
                 pct = float(txt)
             except ValueError:
                 raise ValueError(f"Invalid RFE % for {tag!r}: {txt!r}")
-            
-            n_total = X_tr.shape[1] # number of columns
+            n_total = X_tr.shape[1]
             n_feats = int(np.ceil((pct / 100.0) * n_total))
             return max(1, n_feats)
 
@@ -977,12 +990,22 @@ class MILOTIC:
         defense_model     = build_model().fit(X_tr_def, y_def_tr)
         persistence_model = build_model().fit(X_tr_per, y_per_tr)
 
-        # 8) stash for later and dump models
-        self.selected_features   = list(sel_lbl)
-        self.X_tr_last           = X_tr_lbl
-        self.model_defense       = defense_model
-        self.model_persistence   = persistence_model
+        # 8) compute optimal ROC thresholds
+        y_prob_lbl = label_model.predict_proba(X_te_lbl)[:,1]
+        y_prob_def = defense_model.predict_proba(X_te_def)[:,1]
+        y_prob_per = persistence_model.predict_proba(X_te_per)[:,1]
 
+        opt_lbl = self.optimalThreshold(y_lbl_te, y_prob_lbl)
+        opt_def = self.optimalThreshold(y_def_te, y_prob_def)
+        opt_per = self.optimalThreshold(y_per_te, y_prob_per)
+
+        self.optimal_thresholds = {
+            "Label":       opt_lbl,
+            "Defense":     opt_def,
+            "Persistence": opt_per
+        }
+
+        # 9) dump models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
@@ -991,36 +1014,28 @@ class MILOTIC:
         joblib.dump(defense_model,     self.sTacticModelPath)
         joblib.dump(persistence_model, self.sPersistenceModelPath)
 
-        self.labelModelInput.delete(0, tk.END)
-        self.labelModelInput.insert(0, self.sLabelModelPath)
-        self.tacticModelInput.delete(0, tk.END)
-        self.tacticModelInput.insert(0, self.sTacticModelPath)
-        self.persistenceModelInput.delete(0, tk.END)
-        self.persistenceModelInput.insert(0, self.sPersistenceModelPath)
-
-        # 9) metrics & feature importance tabs
-        def metrics(m, X, y):
-            y_pred = m.predict(X)
-            y_prob = m.predict_proba(X)[:,1]
+        # 10) metrics & display (including thresholds)
+        def metrics(m, X, y, y_prob, tag):
             return {
-                "Accuracy":  accuracy_score(y, y_pred),
-                "Precision": precision_score(y, y_pred, zero_division=0),
-                "Recall":    recall_score(y, y_pred, zero_division=0),
-                "F1":        f1_score(y, y_pred, zero_division=0),
-                "AUC":       roc_auc_score(y, y_prob) if y.nunique()>1 else 0.0
+                "Accuracy":  accuracy_score(y, m.predict(X)),
+                "Precision": precision_score(y, m.predict(X), zero_division=0),
+                "Recall":    recall_score(y, m.predict(X), zero_division=0),
+                "F1":        f1_score(y, m.predict(X), zero_division=0),
+                "AUC":       roc_auc_score(y, y_prob) if y.nunique()>1 else 0.0,
+                "Optimal Threshold": self.optimal_thresholds[tag]
             }
 
         all_m = {}
-        for tag, mdl, X_te, y_te in [
-            ("Label",       label_model,       X_te_lbl, y_lbl_te),
-            ("Defense",     defense_model,     X_te_def, y_def_te),
-            ("Persistence", persistence_model, X_te_per, y_per_te),
+        for tag, mdl, X_te_sub, y_te_sub, y_prob in [
+            ("Label",       label_model,       X_te_lbl, y_lbl_te, y_prob_lbl),
+            ("Defense",     defense_model,     X_te_def, y_def_te, y_prob_def),
+            ("Persistence", persistence_model, X_te_per, y_per_te, y_prob_per),
         ]:
-            for k,v in metrics(mdl, X_te, y_te).items():
+            for k, v in metrics(mdl, X_te_sub, y_te_sub, y_prob, tag).items():
                 all_m[f"{tag} {k}"] = f"{v:.4f}"
 
         self.updateMetricsDisplay(all_m)
-        self.updateFeatureDisplay(label_model.feature_importances_, self.selected_features)
+        self.updateFeatureDisplay(label_model.feature_importances_, list(sel_lbl))
 
         self.showForestTree(label_model,       "Label",       sel_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(defense_model,     "Defense",     sel_def, X_tr_def, y_def_tr)
@@ -1142,6 +1157,10 @@ class MILOTIC:
     #                    CLASSIFY CSV
     ###########################################################################
     def classifyCsv(self, csv_path: str):
+        """
+        Load a CSV (raw registry dump or preprocessed), apply the stored models
+        using the optimal ROC-based thresholds, update metrics, and save output.
+        """
         try:
             # 1) Load raw CSV
             df = self.safe_read_csv(csv_path)
@@ -1160,12 +1179,12 @@ class MILOTIC:
             model_defense = joblib.load(self.sTacticModelPath)
             model_persist = joblib.load(self.sPersistenceModelPath)
 
-            # 4) For each model, grab its exact training features
+            # 4) Grab the exact feature lists the models were trained on
             feat_lbl = list(model_label.feature_names_in_)
             feat_def = list(model_defense.feature_names_in_)
             feat_per = list(model_persist.feature_names_in_)
 
-            # 5) Reindex to exactly those columns (fill missing with 0)
+            # 5) Reindex DataFrame to those feature sets (fill missing cols with 0)
             X_lbl = df.reindex(columns=feat_lbl, fill_value=0)
             X_def = df.reindex(columns=feat_def, fill_value=0)
             X_per = df.reindex(columns=feat_per, fill_value=0)
@@ -1175,23 +1194,27 @@ class MILOTIC:
             X_def = X_def.apply(pd.to_numeric, errors="coerce").fillna(0)
             X_per = X_per.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-            # 7) Predict
-            df["Pred_Label"]   = model_label.predict(X_lbl)
-            df["Pred_Defense"] = model_defense.predict(X_def)
-            df["Pred_Persist"] = model_persist.predict(X_per)
+            # 7) Compute probabilities and apply optimal thresholds
+            prob_lbl = model_label.predict_proba(X_lbl)[:, 1]
+            prob_def = model_defense.predict_proba(X_def)[:, 1]
+            prob_per = model_persist.predict_proba(X_per)[:, 1]
 
-            # 8) If ground-truth available, update metrics
+            df["Pred_Label"]   = (prob_lbl >= self.optimal_thresholds["Label"]).astype(int)
+            df["Pred_Defense"] = (prob_def >= self.optimal_thresholds["Defense"]).astype(int)
+            df["Pred_Persist"] = (prob_per >= self.optimal_thresholds["Persistence"]).astype(int)
+
+            # 8) If ground-truth available, update GUI metrics
             if {"Label", "Tactic"}.issubset(df.columns):
                 metrics = {}
-                metrics |= self._evaluate_predictions(
+                metrics |= self.evaluatePredictions(
                     df["Label"].eq("Malicious").astype(int),
                     df["Pred_Label"], "Label"
                 )
-                metrics |= self._evaluate_predictions(
+                metrics |= self.evaluatePredictions(
                     df["Tactic"].eq("Defense Evasion").astype(int),
                     df["Pred_Defense"], "Defense"
                 )
-                metrics |= self._evaluate_predictions(
+                metrics |= self.evaluatePredictions(
                     df["Tactic"].eq("Persistence").astype(int),
                     df["Pred_Persist"], "Persistence"
                 )
@@ -1207,8 +1230,7 @@ class MILOTIC:
         except Exception as exc:
             messagebox.showerror("Classification error", str(exc))
 
-
-    def _evaluate_predictions(self, y_true, y_pred, tag):
+    def evaluatePredictions(self, y_true, y_pred, tag):
         return {
             f"{tag} Accuracy":  f"{accuracy_score(y_true, y_pred):.4f}",
             f"{tag} Precision": f"{precision_score(y_true, y_pred, zero_division=0):.4f}",
