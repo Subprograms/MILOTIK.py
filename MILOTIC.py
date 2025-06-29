@@ -1018,9 +1018,9 @@ class MILOTIC:
             allm |= {f"{tag} {k}": f"{v:.4f}" for k,v in calc(mdl, X_e, y_e, pr, tag).items()}
         self.updateMetricsDisplay(allm)
         self.updateFeatureDisplay(
-            list(sel_lbl),        label_model.feature_importances_,
-            list(sel_def),        defense_model.feature_importances_,
-            list(sel_per),        persistence_model.feature_importances_
+            list(feat_lbl),        label_model.feature_importances_,
+            list(feat_def),        defense_model.feature_importances_,
+            list(feat_per),        persistence_model.feature_importances_
         )
         self.showForestTree(m_lbl, "Label", feat_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(m_def, "Defense", feat_def, X_tr_def, y_def_tr)
