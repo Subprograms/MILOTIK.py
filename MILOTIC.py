@@ -903,12 +903,13 @@ class MILOTIC:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
         # 2) drop only meta-columns (keep every other dynamic feature)
-        meta = ["Key","Name","Value","Label","Tactic","Type","Type Group","Key Name Category","Path Category"]
+        meta = ["Key", "Name", "Value", "Label", "Tactic",
+                "Type", "Type Group", "Key Name Category", "Path Category"]
         X_all = df.drop(columns=[c for c in meta if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
         # 3) ensure all general dummy columns exist
-        PATH_CATS = ["Startup Path","Service Path","Network Path","Other Path"]
+        PATH_CATS = ["Startup Path", "Service Path", "Network Path", "Other Path"]
         TYPES    = [
             "REG_SZ","REG_EXPAND_SZ","REG_MULTI_SZ",
             "REG_DWORD","REG_QWORD","REG_BINARY",
@@ -919,30 +920,36 @@ class MILOTIC:
             "Internet and Network Keys","File Execution Keys","Other Keys"
         ]
         for p in PATH_CATS:
-            X_all.setdefault(f"PathCategory_{p}", 0)
+            col = f"PathCategory_{p}"
+            if col not in X_all.columns:
+                X_all[col] = 0
         for t in TYPES:
-            X_all.setdefault(f"TypeCategory_{t}", 0)
+            col = f"TypeCategory_{t}"
+            if col not in X_all.columns:
+                X_all[col] = 0
         for n in NAMES:
-            X_all.setdefault(f"NameCategory_{n}", 0)
+            col = f"NameCategory_{n}"
+            if col not in X_all.columns:
+                X_all[col] = 0
 
         # 4) build targets
-        y_lbl = (df.get("Label")=="Malicious").astype(int)
-        y_def = (df.get("Tactic")=="Defense Evasion").astype(int)
-        y_per = (df.get("Tactic")=="Persistence").astype(int)
+        y_lbl = (df.get("Label") == "Malicious").astype(int)
+        y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
+        y_per = (df.get("Tactic") == "Persistence").astype(int)
 
-        # 5) stratified split
+        # 5) stratified train/test split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 6) RFE with % from UI (over ALL features in X_tr)
+        # 6) compute feature counts for RFE from UI %
         def getN(tag):
             txt = self.rfeInputs[tag].get().strip().rstrip('%')
             pct = float(txt) if txt else 0
             total = X_tr.shape[1]
-            return max(1, int(np.ceil((pct/100)*total)))
+            return max(1, int(np.ceil((pct/100) * total)))
         n_lbl, n_def, n_per = getN("Label"), getN("Defense"), getN("Persistence")
 
         def runRFE(est, X, y, n):
@@ -950,12 +957,16 @@ class MILOTIC:
             r.fit(X, y)
             return X.columns[r.support_]
 
-        base = lambda: BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, n_estimators=400, max_depth=None, random_state=42)
+        base = lambda: BalancedRandomForestClassifier(
+            sampling_strategy='all', replacement=True,
+            bootstrap=False, n_estimators=400,
+            max_depth=None, random_state=42
+        )
         feat_lbl = runRFE(base(), X_tr, y_lbl_tr, n_lbl)
         feat_def = runRFE(base(), X_tr, y_def_tr, n_def)
         feat_per = runRFE(base(), X_tr, y_per_tr, n_per)
 
-        # 7) final train on selected features
+        # 7) final training on selected features
         X_tr_lbl, X_te_lbl = X_tr[feat_lbl], X_te[feat_lbl]
         X_tr_def, X_te_def = X_tr[feat_def], X_te[feat_def]
         X_tr_per, X_te_per = X_tr[feat_per], X_te[feat_per]
@@ -964,10 +975,11 @@ class MILOTIC:
         m_def = base().fit(X_tr_def, y_def_tr)
         m_per = base().fit(X_tr_per, y_per_tr)
 
-        # 8) thresholds
+        # 8) compute optimal thresholds
         def opt(y_t, prob):
+            from sklearn.metrics import roc_curve
             fpr, tpr, th = roc_curve(y_t, prob)
-            d = np.sqrt((1-tpr)**2 + fpr**2)
+            d = np.sqrt((1 - tpr)**2 + fpr**2)
             return th[np.argmin(d)]
         prob_lbl = m_lbl.predict_proba(X_te_lbl)[:,1]
         prob_def = m_def.predict_proba(X_te_def)[:,1]
@@ -987,14 +999,14 @@ class MILOTIC:
         joblib.dump(m_def, self.sTacticModelPath)
         joblib.dump(m_per, self.sPersistenceModelPath)
 
-        # 10) metrics + display
+        # 10) evaluate & update GUI
         def calc(m, X, y, prob, tag):
             return {
-                "Accuracy": accuracy_score(y, m.predict(X)),
+                "Accuracy":  accuracy_score(y, m.predict(X)),
                 "Precision": precision_score(y, m.predict(X), zero_division=0),
-                "Recall": recall_score(y, m.predict(X), zero_division=0),
-                "F1": f1_score(y, m.predict(X), zero_division=0),
-                "AUC": roc_auc_score(y, prob) if y.nunique()>1 else 0.0,
+                "Recall":    recall_score(y, m.predict(X), zero_division=0),
+                "F1":        f1_score(y, m.predict(X), zero_division=0),
+                "AUC":       roc_auc_score(y, prob) if y.nunique()>1 else 0.0,
                 "Optimal Threshold": self.optimal_thresholds[tag]
             }
         allm = {}
