@@ -458,17 +458,22 @@ class MILOTIC:
             if source_is_hive:
                 print("Parsing registry hive...")
                 df_raw = self.parseRegistry(self.sHivePath)
+
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 print("Loading raw parsed CSV...")
-                df_raw = pd.read_csv(self.sRawParsedCsvPath, dtype=str, low_memory=False)
+                # use safe_read_csv for encoding detection
+                df_raw = self.safe_read_csv(self.sRawParsedCsvPath)
+
+                # paranoia, fill with 0 if any empty cells
+                for col in ("Key", "Name", "Value", "Type"):
+                    if col not in df_raw.columns:
+                        df_raw[col] = "0"
+
             else:
                 raise FileNotFoundError("No valid Hive Path or Raw Parsed CSV provided.")
 
-            df_raw = self.cleanDataframe(
-                df_raw, drop_all_zero_rows=True, preserve_labels=True
-            )
-
-            # 2) APPLY LABELS / TACTIC TAGS
+            # 2) CLEAN & LABEL
+            df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
             print("Applying labels...")
             df_labeled = self.applyLabels(df_raw)
 
@@ -509,7 +514,6 @@ class MILOTIC:
 
             # Keep only model-input columns
             df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
-
             if "TagHit" in df_preproc.columns:
                 df_preproc.drop(columns=["TagHit"], inplace=True)
 
@@ -523,13 +527,11 @@ class MILOTIC:
                     print(f"Over-wrote training dataset: {self.sTrainingDatasetPath}")
             else:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_train = os.path.join(self.sModelOutputDir,
-                                         f"training_dataset_{ts}.csv")
+                new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
                 df_preproc.to_csv(new_train, index=False)
                 self.sTrainingDatasetPath = new_train
                 print(f"Created new training dataset: {new_train}")
-                messagebox.showinfo("Dataset Created",
-                                    f"New training dataset:\n{new_train}")
+                messagebox.showinfo("Dataset Created", f"New training dataset:\n{new_train}")
 
         except Exception as e:
             msg = f"Error in makeDataset: {e}"
