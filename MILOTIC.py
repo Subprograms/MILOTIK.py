@@ -447,7 +447,7 @@ class MILOTIC:
         2) Clean + label.
         3) Save a new raw-labeled CSV if loading from raw CSV.
         4) Preprocess into a training dataset.
-        5) Save (or append to) the training CSV and update the entry box.
+        5) Save training CSV and update the entry box.
         """
         try:
             # 1) LOAD SOURCE DATA
@@ -483,22 +483,16 @@ class MILOTIC:
             df_preproc = self.preprocessData(df_labeled)
             df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
 
-            # 5) SAVE / APPEND TRAINING DATASET AND UPDATE UI FIELD
-            if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
-                # append to existing
-                self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
-                print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
-            else:
-                # write a brand-new one
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
-                df_preproc.to_csv(new_train, index=False)
-                self.sTrainingDatasetPath = new_train
-                # update the Training Dataset input field
-                self.trainingDatasetInput.delete(0, tk.END)
-                self.trainingDatasetInput.insert(0, new_train)
-                messagebox.showinfo("Dataset Created", f"New training dataset:\n{new_train}")
-                print(f"Created new training dataset: {new_train}")
+            # 5) SAVE TRAINING DATASET AND UPDATE UI FIELD
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
+            df_preproc.to_csv(new_train, index=False)
+            self.sTrainingDatasetPath = new_train
+            # update the Training Dataset input field
+            self.trainingDatasetInput.delete(0, tk.END)
+            self.trainingDatasetInput.insert(0, new_train)
+            messagebox.showinfo("Dataset Created", f"New training dataset:\n{new_train}")
+            print(f"Created new training dataset: {new_train}")
 
         except Exception as e:
             msg = f"Error in makeDataset: {e}"
