@@ -251,7 +251,7 @@ class MILOTIC:
         """
         kp = ent["Key"]
         if kp.endswith("*"):
-            # wildcard ⇒ prefix match
+            # wildcard -> prefix match
             if not rk.startswith(kp[:-1]):
                 return False
         else:
@@ -671,6 +671,11 @@ class MILOTIC:
         then re-indexes so every expected dummy column exists (all-zero where absent),
         and finally scales numeric fields.
         """
+        # guard against missing columns
+        for col in ("Name", "Value", "Type"):
+            if col not in df.columns:
+                df[col] = "0"
+
         if df.empty:
             return pd.DataFrame()
 
@@ -722,16 +727,13 @@ class MILOTIC:
             cleaned = re.sub(r"[^\w]", "_", n.strip())
             return pd.Series({f"NameCategory_{cleaned}": 1}, dtype="float64")
 
-        path_feats     = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
-        name_feats     = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
+        path_feats = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
+        name_feats = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
 
         # 6) assemble everything, dropping the old helper columns
         xdf = pd.concat([
-            # keep the raw columns + engineered numeric
             xdf.drop(columns=["Path Category", "Key Name Category"], errors="ignore"),
-            # then all of our three general dummy blocks
             df_general,
-            # then the specific path/name columns
             path_feats,
             name_feats
         ], axis=1)
@@ -742,10 +744,10 @@ class MILOTIC:
                 xdf[[col]] = MinMaxScaler().fit_transform(xdf[[col]])
         for col in ["Key Size", "Subkey Count"]:
             if col in xdf.columns:
-                xdf[[col]] = RobustScaler().fit_transform(xf[[col]])
+                xdf[[col]] = RobustScaler().fit_transform(xdf[[col]])
 
         return xdf
-        
+
     def categorizePath(self, p):
         if "Run" in p:
             return "Startup Path"
