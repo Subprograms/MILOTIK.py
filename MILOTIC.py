@@ -960,16 +960,22 @@ class MILOTIC:
                 max_depth=None,
                 random_state=42,
             )
-        def get_rfe_count(tag):
+        def getRFEPercent(tag):
+            txt = self.rfeInputs[tag].get().strip().rstrip('%')
+            if not txt:
+                raise ValueError(f"RFE % for {tag!r} is empty")
             try:
-                pct = float(self.rfeInputs[tag].get())
-                return max(1, int((pct / 100.0) * X_tr.shape[1]))
-            except:
-                return max(1, int(0.5 * X_tr.shape[1]))
+                pct = float(txt)
+            except ValueError:
+                raise ValueError(f"Invalid RFE % for {tag!r}: {txt!r}")
+            
+            n_total = X_tr.shape[1] # number of columns
+            n_feats = int(np.ceil((pct / 100.0) * n_total))
+            return max(1, n_feats)
 
-        n_lbl = get_rfe_count("Label")
-        n_def = get_rfe_count("Defense")
-        n_per = get_rfe_count("Persistence")
+        n_lbl = getRFEPercent("Label")
+        n_def = getRFEPercent("Defense")
+        n_per = getRFEPercent("Persistence")
 
         # 7) RFE + fit
         rfe_lbl = RFE(build_model(), n_features_to_select=n_lbl)
@@ -1006,7 +1012,14 @@ class MILOTIC:
         joblib.dump(defense_model,     self.sTacticModelPath)
         joblib.dump(persistence_model, self.sPersistenceModelPath)
 
-        # 9) metrics & feature‐importance tabs
+        self.labelModelInput.delete(0, tk.END)
+        self.labelModelInput.insert(0, self.sLabelModelPath)
+        self.tacticModelInput.delete(0, tk.END)
+        self.tacticModelInput.insert(0, self.sTacticModelPath)
+        self.persistenceModelInput.delete(0, tk.END)
+        self.persistenceModelInput.insert(0, self.sPersistenceModelPath)
+
+        # 9) metrics & feature importance tabs
         def metrics(m, X, y):
             y_pred = m.predict(X)
             y_prob = m.predict_proba(X)[:,1]
@@ -1064,7 +1077,7 @@ class MILOTIC:
         Return a BalancedRandomForestClassifier tuned for the Tactic tasks.
         """
         param_grid = {
-            "n_estimators": [50],
+            "n_estimators": [100],
             "max_depth": [None, 25],
             "min_samples_split": [2],
             "min_samples_leaf": [1],
@@ -1116,7 +1129,7 @@ class MILOTIC:
         buf.seek(0)
         pil_full = Image.open(buf)
 
-        self._init_zoom_canvas(tag)
+        self.zoomCanvas(tag)
         rec = self._tree_canvases[tag]
         canv = rec["canvas"]
 
