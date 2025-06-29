@@ -1017,7 +1017,11 @@ class MILOTIC:
         ]:
             allm |= {f"{tag} {k}": f"{v:.4f}" for k,v in calc(mdl, X_e, y_e, pr, tag).items()}
         self.updateMetricsDisplay(allm)
-        self.updateFeatureDisplay(m_lbl.feature_importances_, list(feat_lbl))
+        self.updateFeatureDisplay(
+            list(sel_lbl),        label_model.feature_importances_,
+            list(sel_def),        defense_model.feature_importances_,
+            list(sel_per),        persistence_model.feature_importances_
+        )
         self.showForestTree(m_lbl, "Label", feat_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(m_def, "Defense", feat_def, X_tr_def, y_def_tr)
         self.showForestTree(m_per, "Persistence", feat_per, X_tr_per, y_per_tr)
@@ -1227,30 +1231,28 @@ class MILOTIC:
         for metric, val in metrics.items():
             self.metricsList.insert("", "end", values=(metric, val))
                 
-    def updateFeatureDisplay(self, importances, features):
+    def updateFeatureDisplay(self,
+                            lbl_feats, lbl_imps,
+                            def_feats, def_imps,
+                            per_feats, per_imps):
         """
-        Populate the per-model feature-importance tabs.
+        Populate the three tabs with feature importances for Label, Defense, and Persistence.
         """
-        # 1) Clear all three tabs
-        for tree in self.featureTabsTabs.values():
-            tree.delete(*tree.get_children())
+        # clear all trees
+        for treeview in self.featureTabsTabs.values():
+            treeview.delete(*treeview.get_children())
 
-        # 2) Label model (importances comes from label_model)
-        label_feats = sorted(zip(features, importances), key=lambda x: x[1], reverse=True)
-        for feat, imp in label_feats:
-            self.featureTabsTabs["Label"].insert("", "end", values=(feat, f"{imp:.4f}"))
+        # Label tab
+        for f, imp in sorted(zip(lbl_feats, lbl_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Label"].insert("", "end", values=(f, f"{imp:.4f}"))
 
-        # 3) Defense-Evasion model
-        if hasattr(self, "model_defense"):
-            def_feats = zip(self.X_tr_last.columns, self.model_defense.feature_importances_)
-            for feat, imp in sorted(def_feats, key=lambda x: x[1], reverse=True):
-                self.featureTabsTabs["Defense"].insert("", "end", values=(feat, f"{imp:.4f}"))
+        # Defense‐Evasion tab
+        for f, imp in sorted(zip(def_feats, def_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Defense"].insert("", "end", values=(f, f"{imp:.4f}"))
 
-        # 4) Persistence model
-        if hasattr(self, "model_persistence"):
-            per_feats = zip(self.X_tr_last.columns, self.model_persistence.feature_importances_)
-            for feat, imp in sorted(per_feats, key=lambda x: x[1], reverse=True):
-                self.featureTabsTabs["Persistence"].insert("", "end", values=(feat, f"{imp:.4f}"))
+        # Persistence tab
+        for f, imp in sorted(zip(per_feats, per_imps), key=lambda x: x[1], reverse=True):
+            self.featureTabsTabs["Persistence"].insert("", "end", values=(f, f"{imp:.4f}")){imp:.4f}"))
 
 
 ###########################################################################
