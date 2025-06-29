@@ -896,12 +896,12 @@ class MILOTIC:
         if df.empty:
             raise ValueError("Training dataset is empty")
 
-        # 1) coerce numerics
+        # 1) coerce numeric columns
         for c in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-        # 2) drop non-features
+        # 2) drop non-feature columns
         non_feat = [
             "Key", "Name", "Value", "Label", "Tactic",
             "Type", "Type Group", "Key Name Category", "Path Category"
@@ -909,7 +909,7 @@ class MILOTIC:
         X_all = df.drop(columns=[c for c in non_feat if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        # 3) ensure every dummy column is present
+        # 3) ensure general dummy columns exist
         PATH_CATS = ["Startup Path", "Service Path", "Network Path", "Other Path"]
         TYPE_GRP  = ["String", "Numeric", "Binary", "Others"]
         KEYNAME_C = [
@@ -925,25 +925,25 @@ class MILOTIC:
             if col not in X_all.columns:
                 X_all[col] = 0
 
-        # 4) build the three y’s
-        y_lbl = (df["Label"] == "Malicious").astype(int)
-        y_def = (df["Tactic"] == "Defense Evasion").astype(int)
-        y_per = (df["Tactic"] == "Persistence").astype(int)
+        # 4) build the three target vectors
+        y_lbl = (df.get("Label") == "Malicious").astype(int)
+        y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
+        y_per = (df.get("Tactic") == "Persistence").astype(int)
 
         missing = [n for n,y in [
             ("Label", y_lbl), ("Defense-Evasion", y_def), ("Persistence", y_per)
-        ] if y.nunique()<2]
+        ] if y.nunique() < 2]
         if missing:
             raise ValueError(f"Training set needs positives for: {', '.join(missing)}")
 
-        # 5) train/test split
+        # 5) stratified train/test split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 6) builder + RFE helper
+        # 6) model builder and RFE helper
         def build_model():
             return BalancedRandomForestClassifier(
                 sampling_strategy="all",
@@ -969,7 +969,7 @@ class MILOTIC:
         n_def = getRFEPercent("Defense")
         n_per = getRFEPercent("Persistence")
 
-        # 7) RFE + fit
+        # 7) RFE and model fitting
         rfe_lbl = RFE(build_model(), n_features_to_select=n_lbl)
         rfe_lbl.fit(X_tr, y_lbl_tr)
         sel_lbl = X_tr.columns[rfe_lbl.support_]
@@ -990,7 +990,7 @@ class MILOTIC:
         defense_model     = build_model().fit(X_tr_def, y_def_tr)
         persistence_model = build_model().fit(X_tr_per, y_per_tr)
 
-        # 8) compute optimal ROC thresholds
+        # 8) compute optimal thresholds
         y_prob_lbl = label_model.predict_proba(X_te_lbl)[:,1]
         y_prob_def = defense_model.predict_proba(X_te_def)[:,1]
         y_prob_per = persistence_model.predict_proba(X_te_per)[:,1]
@@ -999,13 +999,9 @@ class MILOTIC:
         opt_def = self.optimalThreshold(y_def_te, y_prob_def)
         opt_per = self.optimalThreshold(y_per_te, y_prob_per)
 
-        self.optimal_thresholds = {
-            "Label":       opt_lbl,
-            "Defense":     opt_def,
-            "Persistence": opt_per
-        }
+        self.optimal_thresholds = {"Label": opt_lbl, "Defense": opt_def, "Persistence": opt_per}
 
-        # 9) dump models
+        # 9) save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
@@ -1014,7 +1010,7 @@ class MILOTIC:
         joblib.dump(defense_model,     self.sTacticModelPath)
         joblib.dump(persistence_model, self.sPersistenceModelPath)
 
-        # 10) metrics & display (including thresholds)
+        # 10) metrics & visualization
         def metrics(m, X, y, y_prob, tag):
             return {
                 "Accuracy":  accuracy_score(y, m.predict(X)),
@@ -1036,7 +1032,6 @@ class MILOTIC:
 
         self.updateMetricsDisplay(all_m)
         self.updateFeatureDisplay(label_model.feature_importances_, list(sel_lbl))
-
         self.showForestTree(label_model,       "Label",       sel_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(defense_model,     "Defense",     sel_def, X_tr_def, y_def_tr)
         self.showForestTree(persistence_model, "Persistence", sel_per, X_tr_per, y_per_tr)
