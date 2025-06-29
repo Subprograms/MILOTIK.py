@@ -58,65 +58,89 @@ class MILOTIC:
     ###########################################################################
     def setupUI(self):
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0,  weight=1)
+        self.root.rowconfigure(0, weight=1)
 
         frame = ttk.Frame(self.root)
         frame.grid(row=0, column=0, sticky="nsew")
+
         for r in range(0, 13):
             frame.rowconfigure(r, weight=0)
-        frame.rowconfigure(10, weight=1)   # metrics list grows
-        frame.rowconfigure(11, weight=1)   # feature list grows
-        frame.columnconfigure(3, weight=1) # tree notebook grows
+            frame.rowconfigure(10, weight=1)  # metrics list grows
+            frame.rowconfigure(11, weight=1)  # feature list grows
+            frame.columnconfigure(0, weight=0)
+            frame.columnconfigure(1, weight=0)
+            frame.columnconfigure(2, weight=0)
+            frame.columnconfigure(3, weight=1)  # tree view grows
 
-        ttk.Label(frame, text="Hive Path:").grid(row=0, column=0, sticky="e")
-        self.hivePathInput = ttk.Entry(frame, width=50)
-        self.hivePathInput.grid(row=0, column=1, padx=5)
-        ttk.Button(frame, text="Set Hive Path", command=self.setHivePath).grid(row=0, column=2, padx=5)
+        entry_opts = {"width": 50}
+        label_opts = {"sticky": "e", "padx": 2, "pady": 1}
+        entry_pad = {"padx": 2, "pady": 1, "sticky": "w"}
+        btn_pad = {"padx": 2, "pady": 1, "sticky": "w"}
 
-        ttk.Label(frame, text="Malicious Keys File:").grid(row=1, column=0, sticky="e")
-        self.maliciousKeysInput = ttk.Entry(frame, width=50)
-        self.maliciousKeysInput.grid(row=1, column=1, padx=5)
-        ttk.Button(frame, text="Set Malicious Keys", command=self.setMaliciousKeysPath).grid(row=1, column=2, padx=5)
+        ttk.Label(frame, text="Hive Path:").grid(row=0, column=0, **label_opts)
+        self.hivePathInput = ttk.Entry(frame, **entry_opts)
+        self.hivePathInput.grid(row=0, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Hive Path", command=self.setHivePath).grid(row=0, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Tagged Keys File:").grid(row=2, column=0, sticky="e")
-        self.taggedKeysInput = ttk.Entry(frame, width=50)
-        self.taggedKeysInput.grid(row=2, column=1, padx=5)
-        ttk.Button(frame, text="Set Tagged Keys", command=self.setTaggedKeysPath).grid(row=2, column=2, padx=5)
+        ttk.Label(frame, text="Malicious Keys File:").grid(row=1, column=0, **label_opts)
+        self.maliciousKeysInput = ttk.Entry(frame, **entry_opts)
+        self.maliciousKeysInput.grid(row=1, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Malicious Keys", command=self.setMaliciousKeysPath).grid(row=1, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Training Dataset (Optional):").grid(row=3, column=0, sticky="e")
-        self.trainingDatasetInput = ttk.Entry(frame, width=50)
-        self.trainingDatasetInput.grid(row=3, column=1, padx=5)
-        ttk.Button(frame, text="Set Training Dataset", command=self.setTrainingDatasetPath).grid(row=3, column=2, padx=5)
+        ttk.Label(frame, text="Tagged Keys File:").grid(row=2, column=0, **label_opts)
+        self.taggedKeysInput = ttk.Entry(frame, **entry_opts)
+        self.taggedKeysInput.grid(row=2, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Tagged Keys", command=self.setTaggedKeysPath).grid(row=2, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Raw Parsed CSV (Optional):").grid(row=4, column=0, sticky="e")
-        self.rawParsedCsvInput = ttk.Entry(frame, width=50)
-        self.rawParsedCsvInput.grid(row=4, column=1, padx=5)
-        ttk.Button(frame, text="Set Raw Parsed CSV", command=self.setRawParsedCsvPath).grid(row=4, column=2, padx=5)
+        ttk.Label(frame, text="Training Dataset (Optional):").grid(row=3, column=0, **label_opts)
+        self.trainingDatasetInput = ttk.Entry(frame, **entry_opts)
+        self.trainingDatasetInput.grid(row=3, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Training Dataset", command=self.setTrainingDatasetPath).grid(row=3, column=2, **btn_pad)
 
-        ttk.Label(frame, text="CSV to Classify (Optional):").grid(row=5, column=0, sticky="e")
-        self.classifyCsvInput = ttk.Entry(frame, width=50)
-        self.classifyCsvInput.grid(row=5, column=1, padx=5)
-        ttk.Button(frame, text="Set CSV to Classify", command=self.setClassifyCsvPath).grid(row=5, column=2, padx=5)
+        ttk.Label(frame, text="Raw Parsed CSV (Optional):").grid(row=4, column=0, **label_opts)
+        self.rawParsedCsvInput = ttk.Entry(frame, **entry_opts)
+        self.rawParsedCsvInput.grid(row=4, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Raw Parsed CSV", command=self.setRawParsedCsvPath).grid(row=4, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Label Model (Optional):").grid(row=6, column=0, sticky="e")
-        self.labelModelInput = ttk.Entry(frame, width=50)
-        self.labelModelInput.grid(row=6, column=1, padx=5)
-        ttk.Button(frame, text="Set Label Model", command=self.setLabelModelPath).grid(row=6, column=2, padx=5)
+        ttk.Label(frame, text="CSV to Classify (Optional):").grid(row=5, column=0, **label_opts)
+        self.classifyCsvInput = ttk.Entry(frame, **entry_opts)
+        self.classifyCsvInput.grid(row=5, column=1, **entry_pad)
+        ttk.Button(frame, text="Set CSV to Classify", command=self.setClassifyCsvPath).grid(row=5, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Defense Evasion Model (Optional):").grid(row=7, column=0, sticky="e")
-        self.tacticModelInput = ttk.Entry(frame, width=50)
-        self.tacticModelInput.grid(row=7, column=1, padx=5)
-        ttk.Button(frame, text="Set Defense Evasion Model", command=self.setTacticModelPath).grid(row=7, column=2, padx=5)
+        ttk.Label(frame, text="Label Model (Optional):").grid(row=6, column=0, **label_opts)
+        self.labelModelInput = ttk.Entry(frame, **entry_opts)
+        self.labelModelInput.grid(row=6, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Label Model", command=self.setLabelModelPath).grid(row=6, column=2, **btn_pad)
 
-        ttk.Label(frame, text="Persistence Model (Optional):").grid(row=8, column=0, sticky="e")
-        self.persistenceModelInput = ttk.Entry(frame, width=50)
-        self.persistenceModelInput.grid(row=8, column=1, padx=5)
-        ttk.Button(frame, text="Set Persistence Model", command=self.setPersistenceModelPath).grid(row=8, column=2, padx=5)
+        ttk.Label(frame, text="Defense Evasion Model (Optional):").grid(row=7, column=0, **label_opts)
+        self.tacticModelInput = ttk.Entry(frame, **entry_opts)
+        self.tacticModelInput.grid(row=7, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Defense Evasion Model", command=self.setTacticModelPath).grid(row=7, column=2, **btn_pad)
 
+        ttk.Label(frame, text="Persistence Model (Optional):").grid(row=8, column=0, **label_opts)
+        self.persistenceModelInput = ttk.Entry(frame, **entry_opts)
+        self.persistenceModelInput.grid(row=8, column=1, **entry_pad)
+        ttk.Button(frame, text="Set Persistence Model", command=self.setPersistenceModelPath).grid(row=8, column=2, **btn_pad)
+
+        # Pipeline Buttons
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=9, column=0, columnspan=3, pady=10)
+        btn_frame.grid(row=9, column=0, columnspan=3, pady=10, sticky="w")
+        
         ttk.Button(btn_frame, text="Make Dataset", command=self.makeDataset).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Start ML Process", command=self.executeMLProcess).pack(side="left", padx=5)
+        
+        self.rfeInputs = {}
+        for tag in ["Label", "Defense", "Persistence"]:
+            ttk.Label(btn_frame, text=f"RFE % for {tag}:").pack(side="left", padx=(15, 2))
+            entry = ttk.Entry(btn_frame, width=5, foreground="gray")
+            entry.insert(0, "50")
+            entry.pack(side="left")
+
+            def clearText(e=entry):
+                return lambda event: (e.delete(0, "end"), e.config(foreground="black"))
+
+            entry.bind("<FocusIn>", clearText())
+            self.rfeInputs[tag] = entry
 
         metrics_frame = ttk.Frame(frame)
         metrics_frame.grid(row=10, column=0, columnspan=3, sticky="nsew", pady=10)
@@ -130,13 +154,21 @@ class MILOTIC:
 
         feature_frame = ttk.Frame(frame)
         feature_frame.grid(row=11, column=0, columnspan=3, sticky="nsew")
-        self.featureList = ttk.Treeview(feature_frame, columns=("Feature", "Importance"), show="headings")
-        self.featureList.heading("Feature", text="Feature")
-        self.featureList.heading("Importance", text="Importance")
-        self.featureList.column("Feature",    width=200, anchor="w")
-        self.featureList.column("Importance", width=500, anchor="w")
-        self.featureList.pack(side="left", fill="both", expand=True)
-        ttk.Scrollbar(feature_frame, orient="vertical", command=self.featureList.yview).pack(side="right", fill="y")
+
+        self.featureTabs = ttk.Notebook(feature_frame)
+        self.featureTabs.pack(fill="both", expand=True)
+
+        self.featureTabsTabs = {}
+        for tag in ("Label", "Defense", "Persistence"):
+            tab = ttk.Frame(self.featureTabs)
+            self.featureTabs.add(tab, text=tag)
+            tree = ttk.Treeview(tab, columns=("Feature", "Importance"), show="headings")
+            tree.heading("Feature", text="Feature")
+            tree.heading("Importance", text="Importance")
+            tree.column("Feature", width=200, anchor="w")
+            tree.column("Importance", width=120, anchor="w")
+            tree.pack(fill="both", expand=True)
+            self.featureTabsTabs[tag] = tree
 
         self.treeNotebook = ttk.Notebook(frame)
         self.treeNotebook.grid(row=0, column=3, rowspan=12, sticky="nsew", padx=10, pady=5)
@@ -254,22 +286,21 @@ class MILOTIC:
     #    raw = open(path, "rb").read(10000)
     #    enc = chardet.detect(raw)["encoding"] or "utf-8"
     #    df = pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False)
-    #    return self.clean_dataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
+    #    return self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
     
-    def _init_zoom_canvas(self, tag):
+    def zoomCanvas(self, tag):
         """
         Replace the (tab, Label) pair created in setupUI with a scroll-zoom Canvas.
         Call this once per tag when you first draw that tree.
         """
         if tag in getattr(self, "_tree_canvases", {}):
-            return                                        # already initialised
+            return
 
         lbl      = self.img_labels[tag]
-        parent   = lbl.master                            # the Notebook tab
-        lbl.destroy()                                    # remove the plain Label
+        parent   = lbl.master # the Notebook tab
+        lbl.destroy()
 
-        # ------- canvas + scrollbars -----------------------------------------
-        c       = tk.Canvas(parent, bg="white")          # will hold the image
+        c       = tk.Canvas(parent, bg="white")
         vbar    = ttk.Scrollbar(parent, orient="vertical",
                                 command=c.yview)
         hbar    = ttk.Scrollbar(parent, orient="horizontal",
@@ -283,21 +314,19 @@ class MILOTIC:
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
 
-        # ------- zoom + pan bindings -----------------------------------------
-        c.bind("<MouseWheel>", lambda e, t=tag: self._on_zoom(e, t))
+        c.bind("<MouseWheel>", lambda e, t=tag: self.onZoom(e, t))
         c.bind("<ButtonPress-1>",lambda e, canv=c: canv.scan_mark(e.x, e.y))
         c.bind("<B1-Motion>",    lambda e, canv=c: canv.scan_dragto(e.x, e.y, 1))
 
-        # ------- stash --------------------------------------------------------
         self._tree_canvases = getattr(self, "_tree_canvases", {})
         self._tree_canvases[tag] = {
             "canvas"   : c,
-            "pil_orig" : None,     # full-res Pillow image
+            "pil_orig" : None, # full-res Pillow image
             "tk_img"   : None,
             "scale"    : 1.0,
         }
 
-    def _on_zoom(self, event, tag):
+    def onZoom(self, event, tag):
         """
         Mouse-wheel zoom – loss-less because we always resample from the
         stored full-resolution bitmap.
@@ -305,10 +334,10 @@ class MILOTIC:
         rec         = self._tree_canvases[tag]
         pil_full    = rec["pil_orig"]
 
-        # wheel direction
+        # wheel direction for scrolling
         delta       = 1.1 if event.delta > 0 else (1/1.1)
         new_scale   = rec["scale"] * delta
-        new_scale   = min(max(new_scale, 0.1), 5.0)      # clamp 10 % … 500 %
+        new_scale   = min(max(new_scale, 0.1), 5.0)
         rec["scale"] = new_scale
 
         new_w, new_h = int(pil_full.width  * new_scale), \
@@ -332,11 +361,11 @@ class MILOTIC:
     ###########################################################################
     #                          MAKE DATASET
     ###########################################################################
-    def clean_dataframe(self, df: pd.DataFrame, drop_all_zero_rows: bool = True, preserve_labels: bool = True) -> pd.DataFrame:
+    def cleanDataframe(self, df: pd.DataFrame, drop_all_zero_rows: bool = True, preserve_labels: bool = True) -> pd.DataFrame:
         """
         Normalises all cells to printable ASCII; blanks->'0'.
         Drops a row only when every numeric is 0 and
-          every string is '0' and it is not labelled / tagged.
+        every string is '0' and it is not labelled / tagged.
         """
 
         def clean_text(val):
@@ -348,21 +377,27 @@ class MILOTIC:
                 return re.sub(r"[^\x20-\x7E]", "", val).strip() or "0"
             return str(val)
 
-        # == basic cleaning --------------==
+        # basic cleaning and filling
         for col in df.columns:
             df[col] = df[col].apply(clean_text)
         df.replace("", "0", inplace=True)
         df.fillna("0", inplace=True)
 
-        # == optional row prune -------------=
+        # if needed, fill missing Label and Tactic columns with defaults
+        if preserve_labels:
+            if "Label" not in df.columns:
+                df["Label"] = "Unknown"
+            if "Tactic" not in df.columns:
+                df["Tactic"] = "Unknown"
+
+        # optional row prune
         if drop_all_zero_rows:
             numeric_ok = df.select_dtypes(include=[np.number]).sum(axis=1) > 0
             string_ok  = df.select_dtypes(include=[object]).ne("0").any(axis=1)
             keep_mask  = numeric_ok | string_ok
             if preserve_labels:
-                keep_mask |= df["Label"].str.lower().eq("malicious")
-                if "Tactic" in df.columns:
-                    keep_mask |= df["Tactic"].str.lower().ne("none")
+                keep_mask |= df["Label"].astype(str).str.lower().eq("malicious")
+                keep_mask |= df["Tactic"].astype(str).str.lower().ne("none")
             df = df.loc[keep_mask]
 
         return df
@@ -404,7 +439,7 @@ class MILOTIC:
                     })
 
         df = pd.DataFrame(xData)
-        return self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
+        return self.cleanDataframe(df, drop_all_zero_rows=True, preserve_labels=True)
         
     def makeDataset(self):
         """
@@ -417,9 +452,7 @@ class MILOTIC:
         training-dataset CSV.
         """
         try:
-            # ------------------------------------------------------------
-            # 1)  LOAD SOURCE DATA
-            # ------------------------------------------------------------
+            # 1) LOAD SOURCE DATA
             source_is_hive = bool(self.sHivePath and os.path.exists(self.sHivePath))
 
             if source_is_hive:
@@ -431,17 +464,15 @@ class MILOTIC:
             else:
                 raise FileNotFoundError("No valid Hive Path or Raw Parsed CSV provided.")
 
-            df_raw = self.clean_dataframe(
+            df_raw = self.cleanDataframe(
                 df_raw, drop_all_zero_rows=True, preserve_labels=True
             )
 
-            # ------------------------------------------------------------
-            # 2)  APPLY LABELS / TACTIC TAGS
-            # ------------------------------------------------------------
+            # 2) APPLY LABELS / TACTIC TAGS
             print("Applying labels...")
             df_labeled = self.applyLabels(df_raw)
 
-            # Only flip Benign->Malicious for *specific* hostile tactics
+            # Only flip Benign->Malicious for specific hostile tactics
             mask = (
                 (df_labeled["Label"] == "Benign") &
                 df_labeled["Tactic"].isin(["Defense Evasion", "Persistence"])
@@ -450,9 +481,10 @@ class MILOTIC:
                 print(f"Forcing {mask.sum()} tagged rows from Benign -> Malicious")
                 df_labeled.loc[mask, "Label"] = "Malicious"
 
-            # ------------------------------------------------------------
-            # 3)  SAVE / UPDATE RAW-PARSED CSV
-            # ------------------------------------------------------------
+            if "TagHit" in df_labeled.columns:
+                df_labeled.drop(columns=["TagHit"], inplace=True)
+
+            # 3) SAVE / UPDATE RAW-PARSED CSV
             if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 if source_is_hive:
                     # New hive data ⇒ append so corpus grows
@@ -471,18 +503,15 @@ class MILOTIC:
                 self.rawParsedCsvInput.delete(0, "end")
                 self.rawParsedCsvInput.insert(0, new_raw)
 
-            # ------------------------------------------------------------
-            # 4)  PREPROCESS -> TRAINING DATASET
-            # ------------------------------------------------------------
+            # 4) PREPROCESS -> TRAINING DATASET
             print("Preprocessing for training dataset...")
             df_preproc = self.preprocessData(df_labeled)
 
             # Keep only model-input columns
             df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
 
-            # Fill blanks / NaNs
-            df_preproc.replace("", "0", inplace=True)
-            df_preproc.fillna("0", inplace=True)
+            if "TagHit" in df_preproc.columns:
+                df_preproc.drop(columns=["TagHit"], inplace=True)
 
             # Save / append training dataset
             if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
@@ -515,8 +544,11 @@ class MILOTIC:
           - 'Tactic'
           - numeric columns like: Depth, Key Size, Subkey Count, Value Count, Value Processed
           - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_
+          - and ensure depth-based PathCategory_*_Depth* columns come right after general PathCategory_ ones
         """
         keep_cols = []
+
+        # Column identification
         for c in df.columns:
             if c == 'Key':
                 keep_cols.append(c)
@@ -524,9 +556,20 @@ class MILOTIC:
                 keep_cols.append(c)
             elif c in ('Depth','Key Size','Subkey Count','Value Count','Value Processed'):
                 keep_cols.append(c)
-            elif c.startswith('PathCategory_') or c.startswith('TypeGroup_') or c.startswith('KeyNameCategory_'):
+
+        # Separate general path categories from the specific ones for ordering
+        path_cat_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' not in c]
+        path_specific_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' in c]
+
+        # Path column ordering: general ones first, then specific
+        keep_cols += path_cat_cols
+        keep_cols += path_specific_cols
+
+        # Include remaining feature engineered dummies
+        for c in df.columns:
+            if c.startswith('TypeGroup_') or c.startswith('KeyNameCategory_'):
                 keep_cols.append(c)
-        # Only return columns that actually exist
+
         return [col for col in keep_cols if col in df.columns]
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
@@ -609,7 +652,7 @@ class MILOTIC:
         mal_list = self.read_txt(self.sMaliciousKeysPath)               # may be []
         tag_list = self.read_txt(self.sTaggedKeysPath, "Persistence")   # default tactic
 
-        # -------- 1)  Direct malicious list -> Label = Malicious --------
+        # 1) Direct malicious list -> Label = Malicious
         if mal_list:
             for idx, row in df.iterrows():
                 if row["Label"].strip().lower() == "malicious":
@@ -623,7 +666,7 @@ class MILOTIC:
                 if any(self.strict_match(ent, rk, rn, rv, rt) for ent in mal_list):
                     df.at[idx, "Label"] = "Malicious"
 
-        # -------- 2)  Tag list -> set Tactic & TagHit -------------------
+        # 2) Tag list -> set Tactic & TagHit
         if tag_list:
             for idx, row in df.iterrows():
                 if row["Tactic"].strip().lower() != "none":
@@ -640,7 +683,7 @@ class MILOTIC:
                         df.at[idx, "TagHit"] = True
                         break
 
-        # -------- 3)  Final Benign->Malicious promotion -----------------
+        # 3) Final Benign->Malicious promotion
         flip_mask = (
             (df["Label"].str.lower() == "benign") &
             df["TagHit"] &
@@ -653,7 +696,7 @@ class MILOTIC:
         return df
     
     ###########################################################################
-    #                         PREPROCESS (NO RFE)
+    #                         PREPROCESS (NO RFE YET)
     ###########################################################################
     def preprocessData(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -666,16 +709,14 @@ class MILOTIC:
             return pd.DataFrame()
 
         xdf = df.copy()
-        if "TagHit" not in xdf.columns:
-            xdf["TagHit"] = False
+        if "TagHit" in xdf.columns:
+            xdf.drop(columns=["TagHit"], inplace=True)
 
-        # == engineered cols --------------
         xdf["Path Category"]     = xdf["Key"].apply(self.categorizePath)
         xdf["Type Group"]        = xdf["Type"].apply(self.mapType)
         xdf["Key Name Category"] = xdf["Name"].apply(self.categorizeKeyName)
         xdf["Value Processed"]   = xdf["Value"].apply(self.preprocessValue)
 
-        # == expected categories (column universe) ------=
         PATH_CATS  = ["Startup Path", "Service Path", "Network Path", "Other Path"]
         TYPE_GRP   = ["String", "Numeric", "Binary", "Others"]
         KEYNAME_C  = [
@@ -683,19 +724,36 @@ class MILOTIC:
             "Internet and Network Keys", "File Execution Keys", "Other Keys"
         ]
 
-        def fixed_dummies(series, prefix, full):
+        def fixedDummies(series, prefix, full):
             d = pd.get_dummies(series, prefix=prefix)
             need_cols = [f"{prefix}_{c}" for c in full]
             return d.reindex(columns=need_cols, fill_value=0)
 
+        def makeSpecificPathFeatures(p):
+            parts = [part for part in p.strip("\\").split("\\") if part]
+            out = {}
+            for i, part in enumerate(parts):
+                out[f"PathCategory_{part}_Depth{i}"] = 1
+            return pd.Series(out, dtype="float64")
+
+        def makeSpecificKeynameFeatures(n):
+            if not isinstance(n, str):
+                return pd.Series(dtype="float64")
+            cleaned = re.sub(r"[^\w]", "_", n.strip())
+            return pd.Series({f"KeyNameCategory_{cleaned}": 1}, dtype="float64")
+
+        path_feats = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
+        keyname_feats = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
+
         xdf = pd.concat([
             xdf,
-            fixed_dummies(xdf["Path Category"], "PathCategory", PATH_CATS),
-            fixed_dummies(xdf["Type Group"],   "TypeGroup",    TYPE_GRP),
-            fixed_dummies(xdf["Key Name Category"], "KeyNameCategory", KEYNAME_C)
+            fixedDummies(xdf["Path Category"], "PathCategory", PATH_CATS),
+            fixedDummies(xdf["Type Group"], "TypeGroup", TYPE_GRP),
+            fixedDummies(xdf["Key Name Category"], "KeyNameCategory", KEYNAME_C),
+            path_feats,
+            keyname_feats
         ], axis=1)
 
-        # == scale numeric fields ------------=
         for col in ["Depth", "Value Count", "Value Processed"]:
             if col in xdf.columns:
                 xdf[[col]] = MinMaxScaler().fit_transform(xdf[[col]])
@@ -779,7 +837,7 @@ class MILOTIC:
 
                 # If the file is an *unprocessed* registry dump, convert it now
                 if {"Key", "Name", "Type"}.issubset(df_raw.columns):
-                    df_raw = self.clean_dataframe(df_raw, drop_all_zero_rows=True,
+                    df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
                                                   preserve_labels=True)
                     df_raw = self.preprocessData(df_raw)
                     df_raw = df_raw[self.selectTrainingColumns(df_raw)]
@@ -787,7 +845,7 @@ class MILOTIC:
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 print("[ML] Pre-processing raw-parsed CSV …")
                 tmp = self.safe_read_csv(self.sRawParsedCsvPath)
-                tmp = self.clean_dataframe(tmp, drop_all_zero_rows=True,
+                tmp = self.cleanDataframe(tmp, drop_all_zero_rows=True,
                                            preserve_labels=True)
                 df_raw = self.preprocessData(tmp)
                 df_raw = df_raw[self.selectTrainingColumns(df_raw)]
@@ -812,7 +870,7 @@ class MILOTIC:
                     "Internet and Network Keys", "File Execution Keys", "Other Keys"]]
             }
             df_raw = df_raw[[c for c in df_raw.columns if c in training_columns]]
-            df_raw = self.clean_dataframe(df_raw, drop_all_zero_rows=True,
+            df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
                                           preserve_labels=True)
 
             # ----------  choose CSV to classify if user omitted it  -----
@@ -837,19 +895,20 @@ class MILOTIC:
     ###########################################################################
     def trainAndEvaluateModels(self, df):
         """
-        RFE -> top-N features, currently at 10
+        RFE -> top-N features
         train three BRF models
         evaluate & push metrics to GUI
         dump .joblib models
-        export a couple of trees to .PNG if GraphViz is present
         """
         if df.empty:
             raise ValueError("Training dataset is empty")
 
+        # 1) coerce numerics
         for c in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
+        # 2) drop non-features
         non_feat = [
             "Key", "Name", "Value", "Label", "Tactic",
             "Type", "Type Group", "Key Name Category", "Path Category"
@@ -857,36 +916,41 @@ class MILOTIC:
         X_all = df.drop(columns=[c for c in non_feat if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
+        # 3) ENSURE every dummy column is present
+        PATH_CATS = ["Startup Path", "Service Path", "Network Path", "Other Path"]
+        TYPE_GRP  = ["String", "Numeric", "Binary", "Others"]
+        KEYNAME_C = [
+            "Run Keys", "Service Keys", "Security and Configuration Keys",
+            "Internet and Network Keys", "File Execution Keys", "Other Keys"
+        ]
+        needed = (
+            [f"PathCategory_{c}" for c in PATH_CATS] +
+            [f"TypeGroup_{g}"   for g in TYPE_GRP] +
+            [f"KeyNameCategory_{k}" for k in KEYNAME_C]
+        )
+        for col in needed:
+            if col not in X_all.columns:
+                X_all[col] = 0
+
+        # 4) build the three y’s
         y_lbl = (df["Label"] == "Malicious").astype(int)
         y_def = (df["Tactic"] == "Defense Evasion").astype(int)
         y_per = (df["Tactic"] == "Persistence").astype(int)
 
-        missing = [n for n, y in [("Label", y_lbl), ("Defense-Evasion", y_def), ("Persistence", y_per)] if y.nunique() < 2]
+        missing = [n for n,y in [
+            ("Label", y_lbl), ("Defense-Evasion", y_def), ("Persistence", y_per)
+        ] if y.nunique()<2]
         if missing:
             raise ValueError(f"Training set needs positives for: {', '.join(missing)}")
 
+        # 5) train/test split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        rfe = RFE(
-            BalancedRandomForestClassifier(
-                sampling_strategy="all",
-                replacement=True,
-                bootstrap=False,
-                n_estimators=100,
-                random_state=42,
-            ),
-            n_features_to_select=10,
-        )
-        rfe.fit(X_tr, y_lbl_tr)
-        self.selected_features = X_tr.columns[rfe.support_]
-
-        X_tr_sel = X_tr[self.selected_features]
-        X_te_sel = X_te[self.selected_features]
-
+        # 6) builder + RFE helper
         def build_model():
             return BalancedRandomForestClassifier(
                 sampling_strategy="all",
@@ -896,66 +960,91 @@ class MILOTIC:
                 max_depth=None,
                 random_state=42,
             )
+        def get_rfe_count(tag):
+            try:
+                pct = float(self.rfeInputs[tag].get())
+                return max(1, int((pct / 100.0) * X_tr.shape[1]))
+            except:
+                return max(1, int(0.5 * X_tr.shape[1]))
 
-        label_model = build_model().fit(X_tr_sel, y_lbl_tr)
-        defense_model = build_model().fit(X_tr_sel, y_def_tr)
-        persistence_model = build_model().fit(X_tr_sel, y_per_tr)
+        n_lbl = get_rfe_count("Label")
+        n_def = get_rfe_count("Defense")
+        n_per = get_rfe_count("Persistence")
 
-        self.X_tr_last = X_tr_sel
-        self.y_tr_lbl  = y_lbl_tr
-        self.y_tr_def  = y_def_tr
-        self.y_tr_per  = y_per_tr
-        
-        self._show_forest_tree(label_model,   "Label", list(self.selected_features), self.X_tr_last, self.y_tr_lbl)
-        self._show_forest_tree(defense_model, "Defense", list(self.selected_features), self.X_tr_last, self.y_tr_def)
-        self._show_forest_tree(persistence_model, "Persistence", list(self.selected_features), self.X_tr_last, self.y_tr_per)
+        # 7) RFE + fit
+        rfe_lbl = RFE(build_model(), n_features_to_select=n_lbl)
+        rfe_lbl.fit(X_tr, y_lbl_tr)
+        sel_lbl = X_tr.columns[rfe_lbl.support_]
 
-        def metrics(m, X, y):
-            y_pred = m.predict(X)
-            y_prob = m.predict_proba(X)[:, 1]
-            return {
-                "Accuracy": accuracy_score(y, y_pred),
-                "Precision": precision_score(y, y_pred, zero_division=0),
-                "Recall": recall_score(y, y_pred, zero_division=0),
-                "F1": f1_score(y, y_pred, zero_division=0),
-                "AUC": roc_auc_score(y, y_prob) if y.nunique() > 1 else 0.0,
-            }
+        rfe_def = RFE(build_model(), n_features_to_select=n_def)
+        rfe_def.fit(X_tr, y_def_tr)
+        sel_def = X_tr.columns[rfe_def.support_]
 
-        all_metrics = {}
-        for tag, model, X, y in [
-            ("Label", label_model, X_te_sel, y_lbl_te),
-            ("Defense", defense_model, X_te_sel, y_def_te),
-            ("Persistence", persistence_model, X_te_sel, y_per_te),
-        ]:
-            for k, v in metrics(model, X, y).items():
-                all_metrics[f"{tag} {k}"] = f"{v:.4f}"
+        rfe_per = RFE(build_model(), n_features_to_select=n_per)
+        rfe_per.fit(X_tr, y_per_tr)
+        sel_per = X_tr.columns[rfe_per.support_]
+
+        X_tr_lbl, X_te_lbl = X_tr[sel_lbl], X_te[sel_lbl]
+        X_tr_def, X_te_def = X_tr[sel_def], X_te[sel_def]
+        X_tr_per, X_te_per = X_tr[sel_per], X_te[sel_per]
+
+        label_model       = build_model().fit(X_tr_lbl, y_lbl_tr)
+        defense_model     = build_model().fit(X_tr_def, y_def_tr)
+        persistence_model = build_model().fit(X_tr_per, y_per_tr)
+
+        # 8) stash for later and dump models
+        self.selected_features   = list(sel_lbl)
+        self.X_tr_last           = X_tr_lbl
+        self.model_defense       = defense_model
+        self.model_persistence   = persistence_model
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.sLabelModelPath = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
-        self.sTacticModelPath = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
+        self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
+        self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-        joblib.dump(label_model, self.sLabelModelPath)
-        joblib.dump(defense_model, self.sTacticModelPath)
+        joblib.dump(label_model,       self.sLabelModelPath)
+        joblib.dump(defense_model,     self.sTacticModelPath)
         joblib.dump(persistence_model, self.sPersistenceModelPath)
 
-        with open(os.path.join(self.sModelOutputDir, "selected_features.txt"), "w", encoding="utf-8") as f:
-            f.write("\n".join(self.selected_features))
+        # 9) metrics & feature‐importance tabs
+        def metrics(m, X, y):
+            y_pred = m.predict(X)
+            y_prob = m.predict_proba(X)[:,1]
+            return {
+                "Accuracy":  accuracy_score(y, y_pred),
+                "Precision": precision_score(y, y_pred, zero_division=0),
+                "Recall":    recall_score(y, y_pred, zero_division=0),
+                "F1":        f1_score(y, y_pred, zero_division=0),
+                "AUC":       roc_auc_score(y, y_prob) if y.nunique()>1 else 0.0
+            }
 
-        self.updateMetricsDisplay(all_metrics)
+        all_m = {}
+        for tag, mdl, X_te, y_te in [
+            ("Label",       label_model,       X_te_lbl, y_lbl_te),
+            ("Defense",     defense_model,     X_te_def, y_def_te),
+            ("Persistence", persistence_model, X_te_per, y_per_te),
+        ]:
+            for k,v in metrics(mdl, X_te, y_te).items():
+                all_m[f"{tag} {k}"] = f"{v:.4f}"
+
+        self.updateMetricsDisplay(all_m)
         self.updateFeatureDisplay(label_model.feature_importances_, self.selected_features)
 
-    # ----------------------------------------------------------------------
-    # 2.  Grid-search helpers
-    # ----------------------------------------------------------------------           
-    def label_grid_search_rf(self, Xp, yp):
+        self.showForestTree(label_model,       "Label",       sel_lbl, X_tr_lbl, y_lbl_tr)
+        self.showForestTree(defense_model,     "Defense",     sel_def, X_tr_def, y_def_tr)
+        self.showForestTree(persistence_model, "Persistence", sel_per, X_tr_per, y_per_tr)
+
+    def labelGridSearch(self, Xp, yp):
         """
         Return a BalancedRandomForestClassifier tuned for the Label task.
         """
         param_grid = {
-            "n_estimators": [100],
-            "max_depth": [None, 20],
-            "min_samples_split": [2, 5],
-            "min_samples_leaf": [1, 2]
+            "n_estimators": [50],
+            "max_depth": [None, 25],
+            "min_samples_split": [2],
+            "min_samples_leaf": [1],
+            "bootstrap":         [False],
+            "class_weight":      [{0:1, 1:10}]
         }
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
@@ -970,15 +1059,17 @@ class MILOTIC:
         gs.fit(Xp, yp)
         return gs.best_estimator_
 
-    def tactic_grid_search_rf(self, Xp, yp):
+    def tacticGridSearch(self, Xp, yp):
         """
         Return a BalancedRandomForestClassifier tuned for the Tactic tasks.
         """
         param_grid = {
-            "n_estimators": [100],
+            "n_estimators": [50],
             "max_depth": [None, 25],
-            "min_samples_split": [2, 5],
-            "min_samples_leaf": [1, 2]
+            "min_samples_split": [2],
+            "min_samples_leaf": [1],
+            "bootstrap":         [False],
+            "class_weight":      [{0:1, 1:10}]
         }
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
         brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
@@ -993,23 +1084,32 @@ class MILOTIC:
         gs.fit(Xp, yp)
         return gs.best_estimator_
 
-    def _show_forest_tree(self, forest, tag: str, feature_names, X_train, y_train):
+    def showForestTree(self, forest, tag: str, feature_names, X_train, y_train):
+        """
+        Render the best tree from `forest` into the zoomable canvas
+        for the given tag.  Always reset to a uniform default zoom
+        that fits the canvas width exactly.
+        """
+        # pick the best single tree (highest trainset score)
         scores = [est.score(X_train, y_train) for est in forest.estimators_]
-        best_estimator = forest.estimators_[int(np.argmax(scores))]
+        best = forest.estimators_[int(np.argmax(scores))]
 
+        # plot it at high resolution
         rcParams.update({"font.size": 9})
         fig, ax = plt.subplots(figsize=(24, 16), dpi=600)
         tree.plot_tree(
-            best_estimator,
-            feature_names=None,  # Avoids warning from sklearn
+            best,
+            feature_names=None,
             class_names=["Benign/Pure", "Positive"],
             filled=True, rounded=True,
             impurity=False, proportion=False,
+            max_depth=5,  # cap depth
             ax=ax
         )
         ax.axis("off")
         fig.tight_layout(pad=0.3)
 
+        # grab it into a Pillow image
         buf = BytesIO()
         fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
@@ -1019,85 +1119,103 @@ class MILOTIC:
         self._init_zoom_canvas(tag)
         rec = self._tree_canvases[tag]
         canv = rec["canvas"]
+
+        # reset any old scale
+        rec["scale"] = 1.0
         rec["pil_orig"] = pil_full
 
-        base_zoom = {
-            "Label": 2.5,
-            "Defense": 0.5,
-            "Persistence": 0.1,
-        }.get(tag, 1.0)
-
         canv.update_idletasks()
-        fit_scale = 1.0 if canv.winfo_width() <= 1 else canv.winfo_width() / pil_full.width
-        scale = base_zoom * fit_scale
+
+        cw = canv.winfo_width()
+        if cw <= 1:
+            fit_scale = 1.0
+        else:
+            fit_scale = cw / pil_full.width
+
+        rec["scale"] = fit_scale
+        new_w  = int(pil_full.width  * fit_scale)
+        new_h  = int(pil_full.height * fit_scale)
 
         resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-        preview = pil_full.resize(
-            (max(1, int(pil_full.width * scale)), max(1, int(pil_full.height * scale))),
-            resample
-        )
-        tk_img = ImageTk.PhotoImage(preview)
+        preview = pil_full.resize((new_w, new_h), resample)
+        tk_img  = ImageTk.PhotoImage(preview)
         rec["tk_img"] = tk_img
-        rec["scale"] = scale
 
+        # draw
         canv.delete("all")
         canv.create_image(0, 0, anchor="nw", image=tk_img)
-        canv.config(scrollregion=(0, 0, preview.width, preview.height))
+        canv.config(scrollregion=(0, 0, new_w, new_h))
     
     ###########################################################################
     #                    CLASSIFY CSV
     ###########################################################################
     def classifyCsv(self, csv_path: str):
         try:
+            # 1) Load raw CSV
             df = self.safe_read_csv(csv_path)
 
+            # 2) Preprocess if it's a raw registry dump
             if {"Key", "Name", "Type"}.issubset(df.columns):
-                df = self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
+                df = self.cleanDataframe(df, drop_all_zero_rows=True, preserve_labels=True)
                 df = self.preprocessData(df)
                 df = df[self.selectTrainingColumns(df)]
             else:
-                df = self.clean_dataframe(df, drop_all_zero_rows=True, preserve_labels=True)
+                # Already a preprocessed CSV
+                df = self.cleanDataframe(df, drop_all_zero_rows=True, preserve_labels=True)
 
+            # 3) Load trained models
             model_label   = joblib.load(self.sLabelModelPath)
             model_defense = joblib.load(self.sTacticModelPath)
             model_persist = joblib.load(self.sPersistenceModelPath)
 
-            if self.selected_features is None or len(self.selected_features) == 0:
-                self.selected_features = list(model_label.feature_names_in_)
+            # 4) For each model, grab its exact training features
+            feat_lbl = list(model_label.feature_names_in_)
+            feat_def = list(model_defense.feature_names_in_)
+            feat_per = list(model_persist.feature_names_in_)
 
-            for col in self.selected_features:
-                if col not in df.columns:
-                    df[col] = 0
+            # 5) Reindex to exactly those columns (fill missing with 0)
+            X_lbl = df.reindex(columns=feat_lbl, fill_value=0)
+            X_def = df.reindex(columns=feat_def, fill_value=0)
+            X_per = df.reindex(columns=feat_per, fill_value=0)
 
-            X_df = (
-                df[self.selected_features]
-                .apply(pd.to_numeric, errors="coerce")
-                .fillna(0)
-            )
+            # 6) Ensure numeric dtype
+            X_lbl = X_lbl.apply(pd.to_numeric, errors="coerce").fillna(0)
+            X_def = X_def.apply(pd.to_numeric, errors="coerce").fillna(0)
+            X_per = X_per.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-            df["Pred_Label"]   = model_label.predict(X_df)
-            df["Pred_Defense"] = model_defense.predict(X_df)
-            df["Pred_Persist"] = model_persist.predict(X_df)
+            # 7) Predict
+            df["Pred_Label"]   = model_label.predict(X_lbl)
+            df["Pred_Defense"] = model_defense.predict(X_def)
+            df["Pred_Persist"] = model_persist.predict(X_per)
 
-            metrics = {}
+            # 8) If ground-truth available, update metrics
             if {"Label", "Tactic"}.issubset(df.columns):
+                metrics = {}
                 metrics |= self._evaluate_predictions(
-                    df["Label"].eq("Malicious").astype(int), df["Pred_Label"], "Label")
+                    df["Label"].eq("Malicious").astype(int),
+                    df["Pred_Label"], "Label"
+                )
                 metrics |= self._evaluate_predictions(
-                    df["Tactic"].eq("Defense Evasion").astype(int), df["Pred_Defense"], "Defense")
+                    df["Tactic"].eq("Defense Evasion").astype(int),
+                    df["Pred_Defense"], "Defense"
+                )
                 metrics |= self._evaluate_predictions(
-                    df["Tactic"].eq("Persistence").astype(int), df["Pred_Persist"], "Persistence")
+                    df["Tactic"].eq("Persistence").astype(int),
+                    df["Pred_Persist"], "Persistence"
+                )
                 self.updateMetricsDisplay(metrics)
 
+            # 9) Save classified CSV
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(self.sModelOutputDir, f"classified_output_{ts}.csv")
             df.to_csv(out_path, index=False)
-            print(f"[ML] Saved classified output -> {out_path}")
-            messagebox.showinfo("Classification Complete", f"Results saved to:\n{out_path}")
+            messagebox.showinfo("Classification Complete",
+                                f"Results saved to:\n{out_path}")
 
         except Exception as exc:
             messagebox.showerror("Classification error", str(exc))
-            
+
+
     def _evaluate_predictions(self, y_true, y_pred, tag):
         return {
             f"{tag} Accuracy":  f"{accuracy_score(y_true, y_pred):.4f}",
@@ -1113,12 +1231,32 @@ class MILOTIC:
         self.metricsList.delete(*self.metricsList.get_children())
         for metric, val in metrics.items():
             self.metricsList.insert("", "end", values=(metric, val))
-            
+                
     def updateFeatureDisplay(self, importances, features):
-        self.featureList.delete(*self.featureList.get_children())
-        feat_imp = sorted(zip(features, importances), key=lambda x: x[1], reverse=True)
-        for feat, imp in feat_imp:
-            self.featureList.insert("", "end", values=(feat, f"{imp:.4f}"))
+        """
+        Populate the per-model feature-importance tabs.
+        """
+        # 1) Clear all three tabs
+        for tree in self.featureTabsTabs.values():
+            tree.delete(*tree.get_children())
+
+        # 2) Label model (importances comes from label_model)
+        label_feats = sorted(zip(features, importances), key=lambda x: x[1], reverse=True)
+        for feat, imp in label_feats:
+            self.featureTabsTabs["Label"].insert("", "end", values=(feat, f"{imp:.4f}"))
+
+        # 3) Defense-Evasion model
+        if hasattr(self, "model_defense"):
+            def_feats = zip(self.X_tr_last.columns, self.model_defense.feature_importances_)
+            for feat, imp in sorted(def_feats, key=lambda x: x[1], reverse=True):
+                self.featureTabsTabs["Defense"].insert("", "end", values=(feat, f"{imp:.4f}"))
+
+        # 4) Persistence model
+        if hasattr(self, "model_persistence"):
+            per_feats = zip(self.X_tr_last.columns, self.model_persistence.feature_importances_)
+            for feat, imp in sorted(per_feats, key=lambda x: x[1], reverse=True):
+                self.featureTabsTabs["Persistence"].insert("", "end", values=(feat, f"{imp:.4f}"))
+
 
 ###########################################################################
 #                       MAIN
