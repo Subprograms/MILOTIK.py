@@ -887,7 +887,7 @@ class MILOTIC:
     
     def trainAndEvaluateModels(self, df):
         """
-        RFE -> top-N features
+        RFE -> top-N features (from ALL dynamic features)
         train three BRF models
         evaluate & push metrics to GUI
         compute and store optimal ROC thresholds
@@ -897,144 +897,118 @@ class MILOTIC:
             raise ValueError("Training dataset is empty")
 
         # 1) coerce numeric columns
-        for c in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
+        nums = ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]
+        for c in nums:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-        # 2) drop non-feature columns
-        non_feat = [
-            "Key", "Name", "Value", "Label", "Tactic",
-            "Type", "Type Group", "Key Name Category", "Path Category"
-        ]
-        X_all = df.drop(columns=[c for c in non_feat if c in df], errors="ignore")
+        # 2) drop only meta-columns (keep every other dynamic feature)
+        meta = ["Key","Name","Value","Label","Tactic","Type","Type Group","Key Name Category","Path Category"]
+        X_all = df.drop(columns=[c for c in meta if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        # 3) ensure general dummy columns exist
-        PATH_CATS = ["Startup Path", "Service Path", "Network Path", "Other Path"]
-        TYPE_GRP  = ["String", "Numeric", "Binary", "Others"]
-        KEYNAME_C = [
-            "Run Keys", "Service Keys", "Security and Configuration Keys",
-            "Internet and Network Keys", "File Execution Keys", "Other Keys"
+        # 3) ensure all general dummy columns exist
+        PATH_CATS = ["Startup Path","Service Path","Network Path","Other Path"]
+        TYPES    = [
+            "REG_SZ","REG_EXPAND_SZ","REG_MULTI_SZ",
+            "REG_DWORD","REG_QWORD","REG_BINARY",
+            "REG_NONE","REG_LINK"
         ]
-        needed = (
-            [f"PathCategory_{c}" for c in PATH_CATS] +
-            [f"TypeGroup_{g}"   for g in TYPE_GRP] +
-            [f"KeyNameCategory_{k}" for k in KEYNAME_C]
-        )
-        for col in needed:
-            if col not in X_all.columns:
-                X_all[col] = 0
+        NAMES    = [
+            "Run Keys","Service Keys","Security and Configuration Keys",
+            "Internet and Network Keys","File Execution Keys","Other Keys"
+        ]
+        for p in PATH_CATS:
+            X_all.setdefault(f"PathCategory_{p}", 0)
+        for t in TYPES:
+            X_all.setdefault(f"TypeCategory_{t}", 0)
+        for n in NAMES:
+            X_all.setdefault(f"NameCategory_{n}", 0)
 
-        # 4) build the three target vectors
-        y_lbl = (df.get("Label") == "Malicious").astype(int)
-        y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
-        y_per = (df.get("Tactic") == "Persistence").astype(int)
+        # 4) build targets
+        y_lbl = (df.get("Label")=="Malicious").astype(int)
+        y_def = (df.get("Tactic")=="Defense Evasion").astype(int)
+        y_per = (df.get("Tactic")=="Persistence").astype(int)
 
-        missing = [n for n,y in [
-            ("Label", y_lbl), ("Defense-Evasion", y_def), ("Persistence", y_per)
-        ] if y.nunique() < 2]
-        if missing:
-            raise ValueError(f"Training set needs positives for: {', '.join(missing)}")
-
-        # 5) stratified train/test split
+        # 5) stratified split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 6) model builder and RFE helper
-        def build_model():
-            return BalancedRandomForestClassifier(
-                sampling_strategy="all",
-                replacement=True,
-                bootstrap=False,
-                n_estimators=400,
-                max_depth=None,
-                random_state=42,
-            )
-        def getRFEPercent(tag):
+        # 6) RFE with % from UI (over ALL features in X_tr)
+        def getN(tag):
             txt = self.rfeInputs[tag].get().strip().rstrip('%')
-            if not txt:
-                raise ValueError(f"RFE % for {tag!r} is empty")
-            try:
-                pct = float(txt)
-            except ValueError:
-                raise ValueError(f"Invalid RFE % for {tag!r}: {txt!r}")
-            n_total = X_tr.shape[1]
-            n_feats = int(np.ceil((pct / 100.0) * n_total))
-            return max(1, n_feats)
+            pct = float(txt) if txt else 0
+            total = X_tr.shape[1]
+            return max(1, int(np.ceil((pct/100)*total)))
+        n_lbl, n_def, n_per = getN("Label"), getN("Defense"), getN("Persistence")
 
-        n_lbl = getRFEPercent("Label")
-        n_def = getRFEPercent("Defense")
-        n_per = getRFEPercent("Persistence")
+        def runRFE(est, X, y, n):
+            r = RFE(estimator=est, n_features_to_select=n)
+            r.fit(X, y)
+            return X.columns[r.support_]
 
-        # 7) RFE and model fitting
-        rfe_lbl = RFE(build_model(), n_features_to_select=n_lbl)
-        rfe_lbl.fit(X_tr, y_lbl_tr)
-        sel_lbl = X_tr.columns[rfe_lbl.support_]
+        base = lambda: BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, n_estimators=400, max_depth=None, random_state=42)
+        feat_lbl = runRFE(base(), X_tr, y_lbl_tr, n_lbl)
+        feat_def = runRFE(base(), X_tr, y_def_tr, n_def)
+        feat_per = runRFE(base(), X_tr, y_per_tr, n_per)
 
-        rfe_def = RFE(build_model(), n_features_to_select=n_def)
-        rfe_def.fit(X_tr, y_def_tr)
-        sel_def = X_tr.columns[rfe_def.support_]
+        # 7) final train on selected features
+        X_tr_lbl, X_te_lbl = X_tr[feat_lbl], X_te[feat_lbl]
+        X_tr_def, X_te_def = X_tr[feat_def], X_te[feat_def]
+        X_tr_per, X_te_per = X_tr[feat_per], X_te[feat_per]
 
-        rfe_per = RFE(build_model(), n_features_to_select=n_per)
-        rfe_per.fit(X_tr, y_per_tr)
-        sel_per = X_tr.columns[rfe_per.support_]
+        m_lbl = base().fit(X_tr_lbl, y_lbl_tr)
+        m_def = base().fit(X_tr_def, y_def_tr)
+        m_per = base().fit(X_tr_per, y_per_tr)
 
-        X_tr_lbl, X_te_lbl = X_tr[sel_lbl], X_te[sel_lbl]
-        X_tr_def, X_te_def = X_tr[sel_def], X_te[sel_def]
-        X_tr_per, X_te_per = X_tr[sel_per], X_te[sel_per]
-
-        label_model       = build_model().fit(X_tr_lbl, y_lbl_tr)
-        defense_model     = build_model().fit(X_tr_def, y_def_tr)
-        persistence_model = build_model().fit(X_tr_per, y_per_tr)
-
-        # 8) compute optimal thresholds
-        y_prob_lbl = label_model.predict_proba(X_te_lbl)[:,1]
-        y_prob_def = defense_model.predict_proba(X_te_def)[:,1]
-        y_prob_per = persistence_model.predict_proba(X_te_per)[:,1]
-
-        opt_lbl = self.optimalThreshold(y_lbl_te, y_prob_lbl)
-        opt_def = self.optimalThreshold(y_def_te, y_prob_def)
-        opt_per = self.optimalThreshold(y_per_te, y_prob_per)
-
-        self.optimal_thresholds = {"Label": opt_lbl, "Defense": opt_def, "Persistence": opt_per}
+        # 8) thresholds
+        def opt(y_t, prob):
+            fpr, tpr, th = roc_curve(y_t, prob)
+            d = np.sqrt((1-tpr)**2 + fpr**2)
+            return th[np.argmin(d)]
+        prob_lbl = m_lbl.predict_proba(X_te_lbl)[:,1]
+        prob_def = m_def.predict_proba(X_te_def)[:,1]
+        prob_per = m_per.predict_proba(X_te_per)[:,1]
+        self.optimal_thresholds = {
+            'Label': opt(y_lbl_te, prob_lbl),
+            'Defense': opt(y_def_te, prob_def),
+            'Persistence': opt(y_per_te, prob_per)
+        }
 
         # 9) save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-        joblib.dump(label_model,       self.sLabelModelPath)
-        joblib.dump(defense_model,     self.sTacticModelPath)
-        joblib.dump(persistence_model, self.sPersistenceModelPath)
+        joblib.dump(m_lbl, self.sLabelModelPath)
+        joblib.dump(m_def, self.sTacticModelPath)
+        joblib.dump(m_per, self.sPersistenceModelPath)
 
-        # 10) metrics & visualization
-        def metrics(m, X, y, y_prob, tag):
+        # 10) metrics + display
+        def calc(m, X, y, prob, tag):
             return {
-                "Accuracy":  accuracy_score(y, m.predict(X)),
+                "Accuracy": accuracy_score(y, m.predict(X)),
                 "Precision": precision_score(y, m.predict(X), zero_division=0),
-                "Recall":    recall_score(y, m.predict(X), zero_division=0),
-                "F1":        f1_score(y, m.predict(X), zero_division=0),
-                "AUC":       roc_auc_score(y, y_prob) if y.nunique()>1 else 0.0,
+                "Recall": recall_score(y, m.predict(X), zero_division=0),
+                "F1": f1_score(y, m.predict(X), zero_division=0),
+                "AUC": roc_auc_score(y, prob) if y.nunique()>1 else 0.0,
                 "Optimal Threshold": self.optimal_thresholds[tag]
             }
-
-        all_m = {}
-        for tag, mdl, X_te_sub, y_te_sub, y_prob in [
-            ("Label",       label_model,       X_te_lbl, y_lbl_te, y_prob_lbl),
-            ("Defense",     defense_model,     X_te_def, y_def_te, y_prob_def),
-            ("Persistence", persistence_model, X_te_per, y_per_te, y_prob_per),
+        allm = {}
+        for tag, mdl, X_e, y_e, pr in [
+            ("Label", m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
+            ("Defense", m_def, X_te_def, y_def_te, prob_def),
+            ("Persistence", m_per, X_te_per, y_per_te, prob_per)
         ]:
-            for k, v in metrics(mdl, X_te_sub, y_te_sub, y_prob, tag).items():
-                all_m[f"{tag} {k}"] = f"{v:.4f}"
-
-        self.updateMetricsDisplay(all_m)
-        self.updateFeatureDisplay(label_model.feature_importances_, list(sel_lbl))
-        self.showForestTree(label_model,       "Label",       sel_lbl, X_tr_lbl, y_lbl_tr)
-        self.showForestTree(defense_model,     "Defense",     sel_def, X_tr_def, y_def_tr)
-        self.showForestTree(persistence_model, "Persistence", sel_per, X_tr_per, y_per_tr)
+            allm |= {f"{tag} {k}": f"{v:.4f}" for k,v in calc(mdl, X_e, y_e, pr, tag).items()}
+        self.updateMetricsDisplay(allm)
+        self.updateFeatureDisplay(m_lbl.feature_importances_, list(feat_lbl))
+        self.showForestTree(m_lbl, "Label", feat_lbl, X_tr_lbl, y_lbl_tr)
+        self.showForestTree(m_def, "Defense", feat_def, X_tr_def, y_def_tr)
+        self.showForestTree(m_per, "Persistence", feat_per, X_tr_per, y_per_tr)
 
     def labelGridSearch(self, Xp, yp):
         """
