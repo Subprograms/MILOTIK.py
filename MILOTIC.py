@@ -443,95 +443,62 @@ class MILOTIC:
         
     def makeDataset(self):
         """
-        If a hive is supplied -> parse hive -> label -> optionally append to the
-        existing raw-parsed CSV (new data).
-        If only a raw CSV is supplied -> reload + re-label -> overwrite
-        the same CSV (so it never duplicates rows).
-
-        Afterwards preprocesses the labelled data and updates/creates the
-        training-dataset CSV.
+        1) Load either a hive (parseRegistry) or a raw CSV (safe_read_csv).
+        2) Clean + label.
+        3) Save a new raw-labeled CSV if loading from raw CSV.
+        4) Preprocess into a training dataset.
+        5) Save (or append to) the training CSV and update the entry box.
         """
         try:
             # 1) LOAD SOURCE DATA
             source_is_hive = bool(self.sHivePath and os.path.exists(self.sHivePath))
 
             if source_is_hive:
-                print("Parsing registry hive...")
+                # parse hive into raw rows
                 df_raw = self.parseRegistry(self.sHivePath)
-
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
-                print("Loading raw parsed CSV...")
-                # use safe_read_csv for encoding detection
+                # load raw CSV _without_ overwriting it
                 df_raw = self.safe_read_csv(self.sRawParsedCsvPath)
-
-                # paranoia, fill with 0 if any empty cells
-                for col in ("Key", "Name", "Value", "Type"):
-                    if col not in df_raw.columns:
-                        df_raw[col] = "0"
-
             else:
                 raise FileNotFoundError("No valid Hive Path or Raw Parsed CSV provided.")
 
             # 2) CLEAN & LABEL
-            df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
-            print("Applying labels...")
-            df_labeled = self.applyLabels(df_raw)
+            df_clean   = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
+            df_labeled = self.applyLabels(df_clean)
 
-            # Only flip Benign->Malicious for specific hostile tactics
-            mask = (
-                (df_labeled["Label"] == "Benign") &
-                df_labeled["Tactic"].isin(["Defense Evasion", "Persistence"])
-            )
-            if mask.any():
-                print(f"Forcing {mask.sum()} tagged rows from Benign -> Malicious")
-                df_labeled.loc[mask, "Label"] = "Malicious"
-
-            if "TagHit" in df_labeled.columns:
-                df_labeled.drop(columns=["TagHit"], inplace=True)
-
-            # 3) SAVE / UPDATE RAW-PARSED CSV
-            if self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
-                if source_is_hive:
-                    # New hive data ⇒ append so corpus grows
-                    self.appendToExistingCsv(df_labeled, self.sRawParsedCsvPath)
-                    print(f"Appended raw-labeled data to: {self.sRawParsedCsvPath}")
-                else:
-                    # Just refreshing labels ⇒ overwrite
-                    df_labeled.to_csv(self.sRawParsedCsvPath, index=False)
-                    print(f"Over-wrote raw parsed CSV: {self.sRawParsedCsvPath}")
-            else:
+            # 3) SAVE / UPDATE RAW-LABELED CSV
+            # if we started from a hive, append into your existing rawParsedCsvPath if set,
+            # otherwise just keep the hive logic.
+            if not source_is_hive:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_raw = os.path.join(self.sModelOutputDir, f"raw_parsed_{ts}.csv")
+                new_raw = os.path.join(self.sModelOutputDir, f"raw_labeled_{ts}.csv")
                 df_labeled.to_csv(new_raw, index=False)
                 self.sRawParsedCsvPath = new_raw
-                print(f"Created new raw-parsed CSV: {new_raw}")
-                self.rawParsedCsvInput.delete(0, "end")
+                # update the Raw Parsed CSV input field
+                self.rawParsedCsvInput.delete(0, tk.END)
                 self.rawParsedCsvInput.insert(0, new_raw)
+                print(f"Created new raw-labeled CSV: {new_raw}")
 
             # 4) PREPROCESS -> TRAINING DATASET
-            print("Preprocessing for training dataset...")
             df_preproc = self.preprocessData(df_labeled)
-
-            # Keep only model-input columns
             df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
-            if "TagHit" in df_preproc.columns:
-                df_preproc.drop(columns=["TagHit"], inplace=True)
 
-            # Save / append training dataset
+            # 5) SAVE / APPEND TRAINING DATASET AND UPDATE UI FIELD
             if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
-                if source_is_hive:
-                    self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
-                    print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
-                else:
-                    df_preproc.to_csv(self.sTrainingDatasetPath, index=False)
-                    print(f"Over-wrote training dataset: {self.sTrainingDatasetPath}")
+                # append to existing
+                self.appendToExistingCsv(df_preproc, self.sTrainingDatasetPath)
+                print(f"Appended to training dataset: {self.sTrainingDatasetPath}")
             else:
+                # write a brand-new one
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
                 df_preproc.to_csv(new_train, index=False)
                 self.sTrainingDatasetPath = new_train
-                print(f"Created new training dataset: {new_train}")
+                # update the Training Dataset input field
+                self.trainingDatasetInput.delete(0, tk.END)
+                self.trainingDatasetInput.insert(0, new_train)
                 messagebox.showinfo("Dataset Created", f"New training dataset:\n{new_train}")
+                print(f"Created new training dataset: {new_train}")
 
         except Exception as e:
             msg = f"Error in makeDataset: {e}"
@@ -545,7 +512,7 @@ class MILOTIC:
           - 'Label'
           - 'Tactic'
           - numeric columns like: Depth, Key Size, Subkey Count, Value Count, Value Processed
-          - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_
+          - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_, TypeCategory_
           - and ensure depth-based PathCategory_*_Depth* columns come right after general PathCategory_ ones
         """
         keep_cols = []
@@ -560,18 +527,16 @@ class MILOTIC:
                 keep_cols.append(c)
 
         # Separate general path categories from the specific ones for ordering
-        path_cat_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' not in c]
+        path_cat_cols      = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' not in c]
         path_specific_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' in c]
+        keep_cols += path_cat_cols + path_specific_cols
 
-        # Path column ordering: general ones first, then specific
-        keep_cols += path_cat_cols
-        keep_cols += path_specific_cols
-
-        # Include remaining feature engineered dummies
+        # Include remaining feature–engineered dummies, now with TypeCategory_
         for c in df.columns:
-            if c.startswith('TypeGroup_') or c.startswith('KeyNameCategory_'):
+            if c.startswith(('TypeGroup_', 'KeyNameCategory_', 'TypeCategory_')):
                 keep_cols.append(c)
 
+        # Drop anything that slipped in
         return [col for col in keep_cols if col in df.columns]
 
     def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
@@ -702,69 +667,85 @@ class MILOTIC:
     ###########################################################################
     def preprocessData(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Creates engineered columns, one-hot encodes them,
-        then re-indexes so every expected dummy column exists
-        all-zero where category absent).
-        Scales numeric fields.
+        Creates engineered columns, one-hot encodes them with uniform prefixes,
+        then re-indexes so every expected dummy column exists (all-zero where absent),
+        and finally scales numeric fields.
         """
         if df.empty:
             return pd.DataFrame()
 
         xdf = df.copy()
-        if "TagHit" in xdf.columns:
-            xdf.drop(columns=["TagHit"], inplace=True)
+        # drop any leftover TagHit flag
+        xdf.drop(columns=["TagHit"], inplace=True, errors="ignore")
 
+        # 1) original engineered columns
         xdf["Path Category"]     = xdf["Key"].apply(self.categorizePath)
-        xdf["Type Group"]        = xdf["Type"].apply(self.mapType)
         xdf["Key Name Category"] = xdf["Name"].apply(self.categorizeKeyName)
         xdf["Value Processed"]   = xdf["Value"].apply(self.preprocessValue)
 
+        # 2) define the full lists for stable ordering
         PATH_CATS  = ["Startup Path", "Service Path", "Network Path", "Other Path"]
-        TYPE_GRP   = ["String", "Numeric", "Binary", "Others"]
         KEYNAME_C  = [
             "Run Keys", "Service Keys", "Security and Configuration Keys",
             "Internet and Network Keys", "File Execution Keys", "Other Keys"
         ]
+        KNOWN_TYPES = [
+            "REG_SZ", "REG_EXPAND_SZ", "REG_MULTI_SZ",
+            "REG_DWORD", "REG_QWORD",
+            "REG_BINARY",
+            "REG_NONE", "REG_LINK"
+        ]
 
+        # 3) helper for fixed-order dummies
         def fixedDummies(series, prefix, full):
             d = pd.get_dummies(series, prefix=prefix)
             need_cols = [f"{prefix}_{c}" for c in full]
             return d.reindex(columns=need_cols, fill_value=0)
 
+        # 4) general category dummies (all grouped together)
+        df_general = pd.concat([
+            fixedDummies(xdf["Path Category"],     "PathCategory",  PATH_CATS),
+            fixedDummies(xdf["Type"],               "TypeCategory",  KNOWN_TYPES),
+            fixedDummies(xdf["Key Name Category"],  "NameCategory",  KEYNAME_C),
+        ], axis=1)
+
+        # 5) specific per-path and per-name features
         def makeSpecificPathFeatures(p):
             parts = [part for part in p.strip("\\").split("\\") if part]
-            out = {}
-            for i, part in enumerate(parts):
-                out[f"PathCategory_{part}_Depth{i}"] = 1
+            out = {f"PathCategory_{part}_Depth{i}": 1 
+                   for i, part in enumerate(parts)}
             return pd.Series(out, dtype="float64")
 
         def makeSpecificKeynameFeatures(n):
             if not isinstance(n, str):
                 return pd.Series(dtype="float64")
             cleaned = re.sub(r"[^\w]", "_", n.strip())
-            return pd.Series({f"KeyNameCategory_{cleaned}": 1}, dtype="float64")
+            return pd.Series({f"NameCategory_{cleaned}": 1}, dtype="float64")
 
-        path_feats = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
-        keyname_feats = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
+        path_feats     = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
+        name_feats     = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
 
+        # 6) assemble everything, dropping the old helper columns
         xdf = pd.concat([
-            xdf,
-            fixedDummies(xdf["Path Category"], "PathCategory", PATH_CATS),
-            fixedDummies(xdf["Type Group"], "TypeGroup", TYPE_GRP),
-            fixedDummies(xdf["Key Name Category"], "KeyNameCategory", KEYNAME_C),
+            # keep the raw columns + engineered numeric
+            xdf.drop(columns=["Path Category", "Key Name Category"], errors="ignore"),
+            # then all of our three general dummy blocks
+            df_general,
+            # then the specific path/name columns
             path_feats,
-            keyname_feats
+            name_feats
         ], axis=1)
 
+        # 7) scale numeric fields
         for col in ["Depth", "Value Count", "Value Processed"]:
             if col in xdf.columns:
                 xdf[[col]] = MinMaxScaler().fit_transform(xdf[[col]])
         for col in ["Key Size", "Subkey Count"]:
             if col in xdf.columns:
-                xdf[[col]] = RobustScaler().fit_transform(xdf[[col]])
+                xdf[[col]] = RobustScaler().fit_transform(xf[[col]])
 
         return xdf
-
+        
     def categorizePath(self, p):
         if "Run" in p:
             return "Startup Path"
