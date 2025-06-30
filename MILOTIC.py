@@ -809,8 +809,8 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        Loads training dataset, cleans, reduces top 500 features for each model,
-        writes preprocessed training dataset, and begins ML training pipeline.
+        Loads training dataset, cleans, performs early top-500 reduction per model,
+        writes preprocessed dataset, and runs ML pipeline.
         """
         try:
             if not self.sTrainingDatasetPath:
@@ -832,13 +832,13 @@ class MILOTIC:
             else:
                 df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
 
-            # ------------------ EARLY FEATURE REDUCTION -----------------------
-            print("[DEBUG] Starting early tree-based feature reduction...")
+            # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
+            print("[DEBUG] Starting early tree-based feature reduction (per model)...")
 
-            def get_top_500(df_raw, target_col, target_val):
-                X = df_raw.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
+            def get_top_500(df, target_col, target_val):
+                X = df.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
                 X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
-                y = (df_raw.get(target_col) == target_val).astype(int)
+                y = (df.get(target_col) == target_val).astype(int)
 
                 rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X, y)
@@ -849,18 +849,23 @@ class MILOTIC:
             top_def_cols = get_top_500(df_raw, "Tactic", "Defense Evasion")
             top_per_cols = get_top_500(df_raw, "Tactic", "Persistence")
 
-            # Union of all important columns, deduplicated
-            union_cols = sorted(set(top_lbl_cols + top_def_cols + top_per_cols))
-            print(f"[DEBUG] Selected total unique columns across all tasks: {len(union_cols)}")
+            print(f"[DEBUG] Top Label features: {len(top_lbl_cols)}")
+            print(f"[DEBUG] Top Defense features: {len(top_def_cols)}")
+            print(f"[DEBUG] Top Persistence features: {len(top_per_cols)}")
 
-            # Append essentials
-            final_cols = union_cols + [c for c in ("Key", "Label", "Tactic") if c in df_raw.columns]
-            df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
-            df_raw = df_raw[final_cols]
+            # Save 3 reduced CSVs for RFE and model training
+            all_keep = {
+                "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
+                "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
+                "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
+            }
 
-            print("[DEBUG] Final cleaned shape before training:", df_raw.shape)
+            for tag, cols in all_keep.items():
+                out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
+                df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
+                print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
 
-            # Write preprocessed version to a file
+            # Replace main dataframe with the full raw (GUI downstream will use RFE-specific subset)
             self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
             df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
             if hasattr(self, 'txtProcessedDatasetPath'):
