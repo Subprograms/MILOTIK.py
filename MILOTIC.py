@@ -1137,7 +1137,7 @@ class MILOTIC:
     def showForestTree(self, forest, tag: str, feature_names, X_train, y_train):
         print(f"[DEBUG] showForestTree({tag}) about to redraw canvas")
 
-        # pick the single best tree (highest train‐score)
+        # pick the single best tree
         scores = [est.score(X_train, y_train) for est in forest.estimators_]
         best   = forest.estimators_[int(np.argmax(scores))]
 
@@ -1165,16 +1165,26 @@ class MILOTIC:
 
         # swap in the scrollable Canvas if first time
         self.zoomCanvas(tag)
-        rec  = self._tree_canvases[tag]
-        canv = rec["canvas"]
+        canv = self._tree_canvases[tag]["canvas"]
 
-        # reset stored scale & full bitmap
+        # select the right tab so it's actually laid out at full size
+        idx = {"Label": 0, "Defense": 1, "Persistence": 2}[tag]
+        self.treeNotebook.select(self.treeNotebook.tabs()[idx])
+        self.treeNotebook.update_idletasks()
+        canv.update_idletasks()
+
+        rec = self._tree_canvases[tag]
         rec["scale"]    = 1.0
         rec["pil_orig"] = pil_full
 
-        canv.update_idletasks()
-        cw = canv.winfo_width()
-        fit_scale = cw / pil_full.width if cw > 1 else 1.0
+        # compute fit based on the parent frame’s width as a fallback
+        parent = canv.master
+        parent.update_idletasks()
+        available_width = parent.winfo_width() or canv.winfo_width()
+
+        fit_scale = available_width / pil_full.width if available_width > 1 else 1.0
+        # clamp between 0.1 and 1.0 so you never accidentally blow it up
+        fit_scale = min(max(fit_scale, 0.1), 1.0)
         rec["scale"] = fit_scale
 
         new_w = int(pil_full.width  * fit_scale)
@@ -1184,13 +1194,13 @@ class MILOTIC:
         tk_img   = ImageTk.PhotoImage(preview)
         rec["tk_img"] = tk_img
 
-        # draw into Canvas
         canv.delete("all")
         canv.create_image(0, 0, anchor="nw", image=tk_img)
         canv.config(scrollregion=(0, 0, new_w, new_h))
 
         # force redraw
         self.root.update_idletasks()
+        print(f"[DEBUG] {tag} tree drawn at scale {fit_scale:.2f}")
     
     ###########################################################################
     #                    CLASSIFY CSV
