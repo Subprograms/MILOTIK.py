@@ -792,7 +792,7 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        If all three model paths *and* a CSV-to-classify are supplied,
+        If all three model paths and a CSV-to-classify are supplied,
         skip training and go straight to classification.
         Otherwise run the full train-->-classify pipeline.
         """
@@ -818,12 +818,10 @@ class MILOTIC:
                 print("[ML] Using supplied training dataset.")
                 df_raw = self.safe_read_csv(self.sTrainingDatasetPath)
 
-                # If the file is an *unprocessed* registry dump, convert it now
                 if {"Key", "Name", "Type"}.issubset(df_raw.columns):
                     df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
                                                   preserve_labels=True)
                     df_raw = self.preprocessData(df_raw)
-                    df_raw = df_raw[self.selectTrainingColumns(df_raw)]
 
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 print("[ML] Pre-processing raw-parsed CSV …")
@@ -831,7 +829,6 @@ class MILOTIC:
                 tmp = self.cleanDataframe(tmp, drop_all_zero_rows=True,
                                            preserve_labels=True)
                 df_raw = self.preprocessData(tmp)
-                df_raw = df_raw[self.selectTrainingColumns(df_raw)]
 
             else:
                 raise FileNotFoundError("No training dataset or raw-parsed CSV found.")
@@ -840,28 +837,15 @@ class MILOTIC:
             if df_raw.columns.duplicated().any():
                 df_raw = df_raw.groupby(axis=1, level=0).first()
 
-            training_columns = {
-                "Key", "Label", "Tactic",
-                "Depth", "Key Size", "Subkey Count",
-                "Value Count", "Value Processed",
-                *[f"PathCategory_{c}" for c in
-                  ["Startup Path", "Service Path", "Network Path", "Other Path"]],
-                *[f"TypeGroup_{g}" for g in
-                  ["String", "Numeric", "Binary", "Others"]],
-                *[f"KeyNameCategory_{k}" for k in [
-                    "Run Keys", "Service Keys", "Security and Configuration Keys",
-                    "Internet and Network Keys", "File Execution Keys", "Other Keys"]]
-            }
-            df_raw = df_raw[[c for c in df_raw.columns if c in training_columns]]
             df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
-                                          preserve_labels=True)
+                                         preserve_labels=True)
 
             # ----------  choose CSV to classify if user omitted it  -----
             if not classify_ready:
                 self.sClassifyCsvPath = self.sTrainingDatasetPath
                 print("[ML] No classify CSV provided -> will classify training set.")
 
-            # ----------  train -> evaluate -> save models  ----------------
+            # ----------  train -> evaluate -> save models  --------------
             self.trainAndEvaluateModels(df_raw)
 
             # ----------  classify the chosen CSV  -----------------------
@@ -870,7 +854,6 @@ class MILOTIC:
                                 "Training + classification finished!")
 
         except Exception as exc:
-            # Bubble up any problem in a GUI dialog
             messagebox.showerror("Error in ML process", str(exc))
 
     ###########################################################################
@@ -892,9 +875,9 @@ class MILOTIC:
 
     def trainAndEvaluateModels(self, df: pd.DataFrame):
         """
-        RFE -> train three BRF models → evaluate & push metrics to GUI →
-        compute/store optimal ROC thresholds → dump .joblib models →
-        update feature-importance tabs → draw zoomable trees.
+        RFE -> train three BRF models -> evaluate & push metrics to GUI ->
+        compute/store optimal ROC thresholds -> dump .joblib models ->
+        update feature-importance tabs -> draw zoomable trees.
         """
         if df.empty:
             raise ValueError("Training dataset is empty")
@@ -981,7 +964,7 @@ class MILOTIC:
             "Defense":     thr_def,
             "Persistence": thr_per
         }
-        print(f"[INFO] Thresholds → Label: {thr_lbl:.4f}, Defense: {thr_def:.4f}, Persistence: {thr_per:.4f}")
+        print(f"[INFO] Thresholds -> Label: {thr_lbl:.4f}, Defense: {thr_def:.4f}, Persistence: {thr_per:.4f}")
 
         # 9) Save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
