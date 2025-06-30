@@ -898,52 +898,43 @@ class MILOTIC:
         dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
         return thr[np.argmin(dist)]
     
-    def trainAndEvaluateModels(self, df: pd.DataFrame):
+    def trainAndEvaluateModels(self, df_label: pd.DataFrame, df_defense: pd.DataFrame, df_persist: pd.DataFrame):
         """
-        Run RFE on pre-reduced feature set -> train three BRF models -> evaluate &
-        push metrics to GUI -> compute/store optimal ROC thresholds -> dump .joblib
-        models -> update feature-importance tabs -> draw zoomable trees.
+        Accepts three reduced dataframes (top 100 each): label, defense, persistence.
+        Runs RFE -> trains BRF models -> evaluates -> updates GUI.
         """
-        if df.empty:
-            raise ValueError("Training dataset is empty")
 
-        # 1) Coerce known numeric columns
-        for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-        # 2) Prepare features and labels
-        drop_cols = ["Key", "Label", "Tactic"]
-        X_all = df.drop(columns=drop_cols, errors="ignore")
-        for col in X_all.columns:
-            X_all[col] = pd.to_numeric(X_all[col], errors="coerce")
-        X_all.fillna(0, inplace=True)
-
-        y_lbl = (df.get("Label") == "Malicious").astype(int)
-        y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
-        y_per = (df.get("Tactic") == "Persistence").astype(int)
-
-        # 3) Train-test split
-        X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42)
-        y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
-        y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
-
-        # 4) RFE % configuration
-        def getN(tag):
-            txt = self.rfeInputs[tag].get().strip().rstrip("%")
-            pct = float(txt) if txt else 0.0
-            return max(1, int(np.ceil((pct / 100) * X_tr.shape[1])))
-
-        n_lbl = getN("Label")
-        n_def = getN("Defense")
-        n_per = getN("Persistence")
-
-        # 5) RFE or fallback selector
         from sklearn.feature_selection import RFE, SelectFromModel
+        from scipy.sparse import issparse
         import time
 
+        def prepare(df, task):
+            print(f"[DEBUG-{task}] Preparing data...")
+            df = df.copy()
+            for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+            drop_cols = ["Key", "Label", "Tactic"]
+            X = df.drop(columns=drop_cols, errors="ignore")
+            X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
+
+            if task == "Label":
+                y = (df["Label"] == "Malicious").astype(int)
+            elif task == "Defense":
+                y = (df["Tactic"] == "Defense Evasion").astype(int)
+            else:
+                y = (df["Tactic"] == "Persistence").astype(int)
+
+            return X, y
+
+        def getN(tag, X):
+            txt = self.rfeInputs[tag].get().strip().rstrip("%")
+            pct = float(txt) if txt else 0.0
+            return max(1, int(np.ceil((pct / 100) * X.shape[1])))
+
         def runRFE(X, y, n, tag="Unknown", fallback=False):
-            print(f"[RFE-{tag}] Starting feature selection: selecting top {n} of {X.shape[1]} features...")
+            print(f"[RFE-{tag}] Selecting top {n} of {X.shape[1]} features...")
 
             start_time = time.time()
             try:
@@ -972,48 +963,59 @@ class MILOTIC:
 
                 selector.fit(X, y)
                 end_time = time.time()
-
                 selected_feats = X.columns[selector.support_]
-                print(f"[RFE-{tag}] Completed RFE in {end_time - start_time:.2f}s. Selected {len(selected_feats)} features.")
+                print(f"[RFE-{tag}] Completed in {end_time - start_time:.2f}s: {len(selected_feats)} features.")
                 return selected_feats
 
             except Exception as e:
-                print(f"[RFE-{tag}] RFE failed: {e}")
-                print(f"[RFE-{tag}] Falling back to SelectFromModel instead.")
+                print(f"[RFE-{tag}] FAILED: {e}")
                 selector = SelectFromModel(clf, max_features=n, threshold=-np.inf)
                 selector.fit(X, y)
-                selected_feats = X.columns[selector.get_support_()]
-                print(f"[RFE-{tag}] Fallback SelectFromModel selected {len(selected_feats)} features.")
+                selected_feats = X.columns[selector.get_support()]
+                print(f"[RFE-{tag}] Fallback SelectFromModel used. Selected {len(selected_feats)}.")
                 return selected_feats
 
-        feats_lbl = runRFE(X_tr, y_lbl_tr, n_lbl, tag="Label")
-        feats_def = runRFE(X_tr, y_def_tr, n_def, tag="Defense")
-        feats_per = runRFE(X_tr, y_per_tr, n_per, tag="Persistence")
+        print("[DEBUG] Preprocessing all three reduced datasets...")
+        X_lbl, y_lbl = prepare(df_label, "Label")
+        X_def, y_def = prepare(df_defense, "Defense")
+        X_per, y_per = prepare(df_persist, "Persistence")
 
-        # 6) Final training sets
-        X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
-        X_tr_def, X_te_def = X_tr[feats_def], X_te[feats_def]
-        X_tr_per, X_te_per = X_tr[feats_per], X_te[feats_per]
+        print("[DEBUG] Splitting train/test sets...")
+        X_lbl_tr, X_lbl_te, y_lbl_tr, y_lbl_te = train_test_split(X_lbl, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42)
+        X_def_tr, X_def_te, y_def_tr, y_def_te = train_test_split(X_def, y_def, test_size=0.2, stratify=y_def, random_state=42)
+        X_per_tr, X_per_te, y_per_tr, y_per_te = train_test_split(X_per, y_per, test_size=0.2, stratify=y_per, random_state=42)
 
+        print("[DEBUG] Calculating RFE feature counts...")
+        n_lbl = getN("Label", X_lbl_tr)
+        n_def = getN("Defense", X_def_tr)
+        n_per = getN("Persistence", X_per_tr)
+        print(f"[DEBUG] RFE targets: Label={n_lbl}, Defense={n_def}, Persistence={n_per}")
+
+        print("[DEBUG] Running RFE...")
+        feats_lbl = runRFE(X_lbl_tr, y_lbl_tr, n_lbl, tag="Label")
+        feats_def = runRFE(X_def_tr, y_def_tr, n_def, tag="Defense")
+        feats_per = runRFE(X_per_tr, y_per_tr, n_per, tag="Persistence")
+
+        print("[DEBUG] Training models...")
         clf = lambda: BalancedRandomForestClassifier(
             n_estimators=400, random_state=42,
             sampling_strategy="all", replacement=True,
             bootstrap=False
         )
 
-        m_lbl = clf().fit(X_tr_lbl, y_lbl_tr)
-        m_def = clf().fit(X_tr_def, y_def_tr)
-        m_per = clf().fit(X_tr_per, y_per_tr)
+        m_lbl = clf().fit(X_lbl_tr[feats_lbl], y_lbl_tr)
+        m_def = clf().fit(X_def_tr[feats_def], y_def_tr)
+        m_per = clf().fit(X_per_tr[feats_per], y_per_tr)
 
-        # 7) Compute optimal thresholds
+        print("[DEBUG] Calculating optimal thresholds...")
         def find_thresh(y_true, scores):
             fpr, tpr, thr = roc_curve(y_true, scores)
             dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
             return thr[np.argmin(dist)]
 
-        prob_lbl = m_lbl.predict_proba(X_te_lbl)[:, 1]
-        prob_def = m_def.predict_proba(X_te_def)[:, 1]
-        prob_per = m_per.predict_proba(X_te_per)[:, 1]
+        prob_lbl = m_lbl.predict_proba(X_lbl_te[feats_lbl])[:, 1]
+        prob_def = m_def.predict_proba(X_def_te[feats_def])[:, 1]
+        prob_per = m_per.predict_proba(X_per_te[feats_per])[:, 1]
 
         self.optimal_thresholds = {
             "Label":       find_thresh(y_lbl_te, prob_lbl),
@@ -1021,7 +1023,7 @@ class MILOTIC:
             "Persistence": find_thresh(y_per_te, prob_per)
         }
 
-        # 8) Save models
+        print("[DEBUG] Saving trained models...")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
@@ -1030,33 +1032,35 @@ class MILOTIC:
         joblib.dump(m_def, self.sTacticModelPath)
         joblib.dump(m_per, self.sPersistenceModelPath)
 
-        # 9) Push metrics
+        print("[DEBUG] Computing metrics...")
         all_metrics = {}
-        for tag, mdl, X_e, y_e, pr in [
-            ("Label",       m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
-            ("Defense",     m_def, X_te_def, y_def_te, prob_def),
-            ("Persistence", m_per, X_te_per, y_per_te, prob_per),
+        for tag, mdl, X_e, y_e, pr, feats in [
+            ("Label",       m_lbl, X_lbl_te, y_lbl_te, prob_lbl, feats_lbl),
+            ("Defense",     m_def, X_def_te, y_def_te, prob_def, feats_def),
+            ("Persistence", m_per, X_per_te, y_per_te, prob_per, feats_per),
         ]:
-            all_metrics[f"{tag} Accuracy"]  = f"{accuracy_score(y_e, mdl.predict(X_e)):.4f}"
-            all_metrics[f"{tag} Precision"] = f"{precision_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
-            all_metrics[f"{tag} Recall"]    = f"{recall_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
-            all_metrics[f"{tag} F1"]        = f"{f1_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
+            all_metrics[f"{tag} Accuracy"]  = f"{accuracy_score(y_e, mdl.predict(X_e[feats])):.4f}"
+            all_metrics[f"{tag} Precision"] = f"{precision_score(y_e, mdl.predict(X_e[feats]), zero_division=0):.4f}"
+            all_metrics[f"{tag} Recall"]    = f"{recall_score(y_e, mdl.predict(X_e[feats]), zero_division=0):.4f}"
+            all_metrics[f"{tag} F1"]        = f"{f1_score(y_e, mdl.predict(X_e[feats]), zero_division=0):.4f}"
             all_metrics[f"{tag} AUC"]       = f"{roc_auc_score(y_e, pr):.4f}"
             all_metrics[f"{tag} Threshold"] = f"{self.optimal_thresholds[tag]:.4f}"
 
         self.updateMetricsDisplay(all_metrics)
 
-        # 10) Feature tab display
+        print("[DEBUG] Updating feature tab display...")
         self.updateFeatureDisplay(
             list(feats_lbl), m_lbl.feature_importances_,
             list(feats_def), m_def.feature_importances_,
             list(feats_per), m_per.feature_importances_,
         )
 
-        # 11) Visualize top trees
-        self.showForestTree(m_lbl,      "Label",       feats_lbl, X_tr_lbl, y_lbl_tr)
-        self.showForestTree(m_def,      "Defense",     feats_def, X_tr_def, y_def_tr)
-        self.showForestTree(m_per,      "Persistence", feats_per, X_tr_per, y_per_tr)
+        print("[DEBUG] Drawing tree visualizations...")
+        self.showForestTree(m_lbl, "Label", feats_lbl, X_lbl_tr[feats_lbl], y_lbl_tr)
+        self.showForestTree(m_def, "Defense", feats_def, X_def_tr[feats_def], y_def_tr)
+        self.showForestTree(m_per, "Persistence", feats_per, X_per_tr[feats_per], y_per_tr)
+
+        print("[DEBUG] Training + evaluation complete.")
 
     def labelGridSearch(self, Xp, yp):
         """
