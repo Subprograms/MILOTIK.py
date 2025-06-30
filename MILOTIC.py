@@ -891,79 +891,69 @@ class MILOTIC:
     
 
     def trainAndEvaluateModels(self, df: pd.DataFrame):
-        from sklearn.metrics import roc_curve
-
+        """
+        RFE -> train three BRF models → evaluate & push metrics to GUI →
+        compute/store optimal ROC thresholds → dump .joblib models →
+        update feature-importance tabs → draw zoomable trees.
+        """
         if df.empty:
             raise ValueError("Training dataset is empty")
 
-        # 1) Coerce numeric columns
+        # 1) Coerce our known numerics
         for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 2) Drop only 'Key', 'Label', 'Tactic'—keep everything else (all your engineered features)
-        X_all = df.drop(columns=[c for c in ("Key", "Label", "Tactic") if c in df], errors="ignore")
-        X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
+        # 2) Drop only Key, Label, and Tactic from the feature set for RFE
+        drop_cols = [c for c in ("Key", "Label", "Tactic") if c in df.columns]
+        X_all = df.drop(columns=drop_cols, errors="ignore") \
+                  .apply(pd.to_numeric, errors="coerce") \
+                  .fillna(0)
+        print("[ML] Features into RFE:", list(X_all.columns))
 
-        # 3) Ensure all general dummy columns exist
-        PATH_CATS = ["Startup Path","Service Path","Network Path","Other Path"]
-        TYPES    = ["REG_SZ","REG_EXPAND_SZ","REG_MULTI_SZ",
-                    "REG_DWORD","REG_QWORD","REG_BINARY",
-                    "REG_NONE","REG_LINK"]
-        NAMES    = ["Run Keys","Service Keys","Security and Configuration Keys",
-                    "Internet and Network Keys","File Execution Keys","Other Keys"]
+        # 3) Build target vectors
+        y_lbl = (df.get("Label") == "Malicious").astype(int)
+        y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
+        y_per = (df.get("Tactic") == "Persistence").astype(int)
 
-        # add missing general dummies
-        for p in PATH_CATS:
-            col = f"PathCategory_{p}"
-            if col not in X_all.columns:
-                X_all[col] = 0
-        for t in TYPES:
-            col = f"TypeCategory_{t}"
-            if col not in X_all.columns:
-                X_all[col] = 0
-        for n in NAMES:
-            col = f"NameCategory_{n}"
-            if col not in X_all.columns:
-                X_all[col] = 0
-
-        # (Your per-path "_Depth" and per-name cleaned dummies are already in X_all from preprocessData)
-
-        # 4) Build binary targets
-        y_lbl = (df["Label"] == "Malicious").astype(int)
-        y_def = (df["Tactic"] == "Defense Evasion").astype(int)
-        y_per = (df["Tactic"] == "Persistence").astype(int)
-
-        # 5) Train/test split
+        # 4) Stratified train/test split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 6) RFE counts from UI
+        # 5) Determine number features for RFE from the RFE % inputs
         def getN(tag):
-            txt = self.rfeInputs[tag].get().strip().rstrip('%')
-            pct = float(txt) if txt else 0
-            return max(1, int(np.ceil((pct/100) * X_tr.shape[1])))
-        n_lbl, n_def, n_per = getN("Label"), getN("Defense"), getN("Persistence")
+            txt = self.rfeInputs[tag].get().strip().rstrip("%")
+            pct = float(txt) if txt else 0.0
+            return max(1, int(np.ceil((pct / 100) * X_tr.shape[1])))
 
-        # 7) Run RFE over all features in X_all
+        n_lbl = getN("Label")
+        n_def = getN("Defense")
+        n_per = getN("Persistence")
+
+        # 6) Run RFE to pick top-N features
         def runRFE(est, X, y, n):
-            sel = RFE(estimator=est, n_features_to_select=n)
-            sel.fit(X, y)
-            return X.columns[sel.support_]
+            selector = RFE(estimator=est, n_features_to_select=n)
+            selector.fit(X, y)
+            print(f"[INFO] RFE selected {selector.support_.sum()} / {X.shape[1]} features")
+            return X.columns[selector.support_]
 
         base_clf = lambda: BalancedRandomForestClassifier(
-            sampling_strategy='all', replacement=True, bootstrap=False,
-            n_estimators=400, max_depth=None, random_state=42
+            sampling_strategy="all",
+            replacement=True,
+            bootstrap=False,
+            n_estimators=400,
+            max_depth=None,
+            random_state=42
         )
 
         feats_lbl = runRFE(base_clf(), X_tr, y_lbl_tr, n_lbl)
         feats_def = runRFE(base_clf(), X_tr, y_def_tr, n_def)
         feats_per = runRFE(base_clf(), X_tr, y_per_tr, n_per)
 
-        # 8) Train final models on selected features
+        # 7) Train final models on the selected features
         X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
         X_tr_def, X_te_def = X_tr[feats_def], X_te[feats_def]
         X_tr_per, X_te_per = X_tr[feats_per], X_te[feats_per]
@@ -972,62 +962,65 @@ class MILOTIC:
         m_def = base_clf().fit(X_tr_def, y_def_tr)
         m_per = base_clf().fit(X_tr_per, y_per_tr)
 
-        # 9) Compute ROC‐based thresholds
+        # 8) Compute ROC-based optimal thresholds
         def find_thresh(y_true, scores):
             fpr, tpr, thr = roc_curve(y_true, scores)
-            dist = np.sqrt((1 - tpr)**2 + fpr**2)
+            dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
             return thr[np.argmin(dist)]
 
-        prob_lbl = m_lbl.predict_proba(X_te_lbl)[:,1]
-        prob_def = m_def.predict_proba(X_te_def)[:,1]
-        prob_per = m_per.predict_proba(X_te_per)[:,1]
+        prob_lbl = m_lbl.predict_proba(X_te_lbl)[:, 1]
+        prob_def = m_def.predict_proba(X_te_def)[:, 1]
+        prob_per = m_per.predict_proba(X_te_per)[:, 1]
 
         thr_lbl = find_thresh(y_lbl_te, prob_lbl)
         thr_def = find_thresh(y_def_te, prob_def)
         thr_per = find_thresh(y_per_te, prob_per)
+
         self.optimal_thresholds = {
-            "Label": thr_lbl,
-            "Defense": thr_def,
+            "Label":       thr_lbl,
+            "Defense":     thr_def,
             "Persistence": thr_per
         }
+        print(f"[INFO] Thresholds → Label: {thr_lbl:.4f}, Defense: {thr_def:.4f}, Persistence: {thr_per:.4f}")
 
-        # 10) Save models
+        # 9) Save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
+
         joblib.dump(m_lbl, self.sLabelModelPath)
         joblib.dump(m_def, self.sTacticModelPath)
         joblib.dump(m_per, self.sPersistenceModelPath)
+        print("[INFO] Models saved.")
 
-        # 11) Update GUI metrics
-        metrics = {}
+        # 10) Evaluate and push metrics into the GUI
+        all_metrics = {}
         for tag, mdl, X_e, y_e, pr in [
-            ("Label", m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
-            ("Defense", m_def, X_te_def, y_def_te, prob_def),
+            ("Label",       m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
+            ("Defense",     m_def, X_te_def, y_def_te, prob_def),
             ("Persistence", m_per, X_te_per, y_per_te, prob_per),
         ]:
-            pred = (pr >= self.optimal_thresholds[tag]).astype(int)
-            metrics[f"{tag} Accuracy"]  = f"{accuracy_score(y_e, pred):.4f}"
-            metrics[f"{tag} Precision"] = f"{precision_score(y_e, pred, zero_division=0):.4f}"
-            metrics[f"{tag} Recall"]    = f"{recall_score(y_e, pred, zero_division=0):.4f}"
-            metrics[f"{tag} F1"]        = f"{f1_score(y_e, pred):.4f}"
-            metrics[f"{tag} AUC"]       = f"{roc_auc_score(y_e, pr):.4f}"
-            metrics[f"{tag} Threshold"] = f"{self.optimal_thresholds[tag]:.4f}"
+            all_metrics[f"{tag} Accuracy"]  = f"{accuracy_score(y_e, mdl.predict(X_e)):.4f}"
+            all_metrics[f"{tag} Precision"] = f"{precision_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
+            all_metrics[f"{tag} Recall"]    = f"{recall_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
+            all_metrics[f"{tag} F1"]        = f"{f1_score(y_e, mdl.predict(X_e), zero_division=0):.4f}"
+            all_metrics[f"{tag} AUC"]       = f"{roc_auc_score(y_e, pr):.4f}"
+            all_metrics[f"{tag} Threshold"] = f"{self.optimal_thresholds[tag]:.4f}"
 
-        self.updateMetricsDisplay(metrics)
+        self.updateMetricsDisplay(all_metrics)
 
-        # 12) Populate feature‐importance tabs
+        # 11) Populate feature-importance tabs
         self.updateFeatureDisplay(
             list(feats_lbl), m_lbl.feature_importances_,
             list(feats_def), m_def.feature_importances_,
-            list(feats_per), m_per.feature_importances_
+            list(feats_per), m_per.feature_importances_,
         )
 
-        # 13) Draw zoomable trees
-        self.showForestTree(m_lbl,       "Label",      feats_lbl, X_tr_lbl, y_lbl_tr)
-        self.showForestTree(m_def,       "Defense",    feats_def, X_tr_def, y_def_tr)
-        self.showForestTree(m_per,       "Persistence",feats_per, X_tr_per, y_per_tr)
+        # 12) Draw zoomable trees for each model
+        self.showForestTree(m_lbl,      "Label",       feats_lbl, X_tr_lbl, y_lbl_tr)
+        self.showForestTree(m_def,      "Defense",     feats_def, X_tr_def, y_def_tr)
+        self.showForestTree(m_per,      "Persistence", feats_per, X_tr_per, y_per_tr)
 
     def labelGridSearch(self, Xp, yp):
         """
