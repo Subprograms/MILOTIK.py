@@ -843,18 +843,19 @@ class MILOTIC:
                 rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X, y)
                 top_500_idx = np.argsort(rf.feature_importances_)[-500:]
-                return X.columns[top_500_idx].tolist()
+                return list(X.columns[top_500_idx])
 
             top_lbl_cols = get_top_500(df_raw, "Label", "Malicious")
             top_def_cols = get_top_500(df_raw, "Tactic", "Defense Evasion")
             top_per_cols = get_top_500(df_raw, "Tactic", "Persistence")
 
-            # Union of all important columns
+            # Union of all important columns, deduplicated
             union_cols = sorted(set(top_lbl_cols + top_def_cols + top_per_cols))
             print(f"[DEBUG] Selected total unique columns across all tasks: {len(union_cols)}")
 
             # Append essentials
             final_cols = union_cols + [c for c in ("Key", "Label", "Tactic") if c in df_raw.columns]
+            df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
             df_raw = df_raw[final_cols]
 
             print("[DEBUG] Final cleaned shape before training:", df_raw.shape)
@@ -862,6 +863,9 @@ class MILOTIC:
             # Write preprocessed version to a file
             self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
             df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
+            if hasattr(self, 'txtProcessedDatasetPath'):
+                self.txtProcessedDatasetPath.delete(0, "end")
+                self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
 
             self.trainAndEvaluateModels(df_raw)
 
