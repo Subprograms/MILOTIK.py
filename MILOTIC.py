@@ -904,8 +904,8 @@ class MILOTIC:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 2) Drop only Key, Label, and Tactic from the feature set for RFE
-        drop_cols = [c for c in ("Key", "Label", "Tactic") if c in df.columns]
+        # 2) Drop Key, Label, Tactic columns from feature set for RFE
+        drop_cols = ["Key", "Label", "Tactic"]
         X_all = df.drop(columns=drop_cols, errors="ignore") \
                   .apply(pd.to_numeric, errors="coerce") \
                   .fillna(0)
