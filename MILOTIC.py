@@ -136,7 +136,7 @@ class MILOTIC:
         
         self.rfeInputs = {}
         for tag in ["Label", "Defense", "Persistence"]:
-            ttk.Label(btn_frame, text=f"Feature # for {tag}:").pack(side="left", padx=(15, 2))
+            ttk.Label(btn_frame, text=f"RFE % for {tag}:").pack(side="left", padx=(15, 2))
             entry = ttk.Entry(btn_frame, width=5, foreground="gray")
             entry.insert(0, "50")
             entry.pack(side="left")
@@ -836,19 +836,25 @@ class MILOTIC:
             # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
             print("[DEBUG] Starting early tree-based feature reduction (per model)...")
 
-            def get_top_100(df, target_col, target_val):
+            def get_top_k(df, target_col, target_val, k=500):
                 X = df.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
                 X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
                 y = (df.get(target_col) == target_val).astype(int)
 
                 rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X, y)
-                top_100_idx = np.argsort(rf.feature_importances_)[-100:]
-                return list(X.columns[top_100_idx])
+                importances = rf.feature_importances_
+                
+                if len(importances) < k:
+                    print(f"[WARNING] Requested top {k}, but only {len(importances)} features available. Returning all.")
+                    return list(X.columns)
 
-            top_lbl_cols = get_top_100(trainingdf, "Label", "Malicious")
-            top_def_cols = get_top_100(trainingdf, "Tactic", "Defense Evasion")
-            top_per_cols = get_top_100(trainingdf, "Tactic", "Persistence")
+                top_k_idx = np.argsort(importances)[-k:]
+                return list(X.columns[top_k_idx])
+
+            top_lbl_cols = get_top_k(trainingdf, "Label", "Malicious", k=500)
+            top_def_cols = get_top_k(trainingdf, "Tactic", "Defense Evasion", k=500)
+            top_per_cols = get_top_k(trainingdf, "Tactic", "Persistence", k=500)
 
             print(f"[DEBUG] Top Label features: {len(top_lbl_cols)}")
             print(f"[DEBUG] Top Defense features: {len(top_def_cols)}")
