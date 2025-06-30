@@ -809,7 +809,7 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        Loads training dataset, cleans, performs early top-500 reduction per model,
+        Loads training dataset, cleans, performs early top-100 reduction per model,
         writes preprocessed dataset if needed, and runs ML pipeline.
         """
         try:
@@ -832,44 +832,43 @@ class MILOTIC:
             if is_preprocessed:
                 print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
             else:
-                print("[DEBUG] Starting cleaning pipeline...")
                 df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
-                print("[DEBUG] Cleaning complete. Shape:", df_raw.shape)
 
             # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
             print("[DEBUG] Starting early tree-based feature reduction (per model)...")
 
-            def get_top_500(df, target_col, target_val):
+            def get_top_100(df, target_col, target_val):
                 X = df.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
                 X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
                 y = (df.get(target_col) == target_val).astype(int)
 
                 rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X, y)
-                top_500_idx = np.argsort(rf.feature_importances_)[-500:]
-                return list(X.columns[top_500_idx])
+                top_100_idx = np.argsort(rf.feature_importances_)[-100:]
+                return list(X.columns[top_100_idx])
 
-            top_lbl_cols = get_top_500(df_raw, "Label", "Malicious")
-            top_def_cols = get_top_500(df_raw, "Tactic", "Defense Evasion")
-            top_per_cols = get_top_500(df_raw, "Tactic", "Persistence")
+            top_lbl_cols = get_top_100(df_raw, "Label", "Malicious")
+            top_def_cols = get_top_100(df_raw, "Tactic", "Defense Evasion")
+            top_per_cols = get_top_100(df_raw, "Tactic", "Persistence")
 
             print(f"[DEBUG] Top Label features: {len(top_lbl_cols)}")
             print(f"[DEBUG] Top Defense features: {len(top_def_cols)}")
             print(f"[DEBUG] Top Persistence features: {len(top_per_cols)}")
 
             # Save 3 reduced CSVs for RFE and model training
+            all_keep = {
+                "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
+                "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
+                "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
+            }
+
+            for tag, cols in all_keep.items():
+                out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
+                df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
+                print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
+
+            # Only save preprocessed version if it was originally raw
             if not is_preprocessed:
-                all_keep = {
-                    "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
-                    "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
-                    "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
-                }
-
-                for tag, cols in all_keep.items():
-                    out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
-                    df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
-                    print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
-
                 self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
                 df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
                 if hasattr(self, 'txtProcessedDatasetPath'):
@@ -878,7 +877,6 @@ class MILOTIC:
 
             print("[DEBUG] Launching training + evaluation pipeline...")
             self.trainAndEvaluateModels(df_raw)
-            print("[INFO] ML pipeline completed successfully.")
 
         except Exception as e:
             print("[ERROR] executeMLProcess():", e)
