@@ -136,7 +136,7 @@ class MILOTIC:
         
         self.rfeInputs = {}
         for tag in ["Label", "Defense", "Persistence"]:
-            ttk.Label(btn_frame, text=f"RFE % for {tag}:").pack(side="left", padx=(15, 2))
+            ttk.Label(btn_frame, text=f"Feature # for {tag}:").pack(side="left", padx=(15, 2))
             entry = ttk.Entry(btn_frame, width=5, foreground="gray")
             entry.insert(0, "50")
             entry.pack(side="left")
