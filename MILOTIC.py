@@ -809,8 +809,8 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        Loads training dataset, cleans, performs early top-100 reduction per model,
-        writes preprocessed dataset if needed, and runs ML pipeline.
+        Loads training dataset, skips redundant processing if already preprocessed,
+        runs early top-100 feature reduction per model, and calls training pipeline.
         """
         try:
             if not self.sTrainingDatasetPath:
@@ -828,7 +828,6 @@ class MILOTIC:
             print("[DEBUG] CSV Loaded: shape =", trainingdf.shape)
 
             is_preprocessed = all(col in trainingdf.columns for col in ("Depth", "Key Size", "Value Processed"))
-
             if is_preprocessed:
                 print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
             else:
@@ -856,32 +855,20 @@ class MILOTIC:
             print(f"[DEBUG] Top Persistence features: {len(top_per_cols)}")
 
             # Save 3 reduced CSVs for RFE and model training
-            all_keep = {
-                "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
-                "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
-                "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
-            }
-
-            for tag, cols in all_keep.items():
-                out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
-                trainingdf.loc[:, trainingdf.columns.intersection(cols)].to_csv(out_path, index=False)
-                print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
-
-            # Only save preprocessed version if it was originally raw
-            if not is_preprocessed:
-                self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
-                trainingdf.to_csv(self.sPreprocessedCsvPath, index=False)
-                if hasattr(self, 'txtProcessedDatasetPath'):
-                    self.txtProcessedDatasetPath.delete(0, "end")
-                    self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
-
-            print("[DEBUG] Launching training + evaluation pipeline...")
-
-            # Load the saved reduced datasets
             base_path = os.path.splitext(self.sTrainingDatasetPath)[0]
             label_path = base_path + "_label_reduced.csv"
             defense_path = base_path + "_defense_reduced.csv"
             persistence_path = base_path + "_persistence_reduced.csv"
+
+            trainingdf.loc[:, trainingdf.columns.intersection(top_lbl_cols + ["Key", "Label", "Tactic"])].to_csv(label_path, index=False)
+            trainingdf.loc[:, trainingdf.columns.intersection(top_def_cols + ["Key", "Label", "Tactic"])].to_csv(defense_path, index=False)
+            trainingdf.loc[:, trainingdf.columns.intersection(top_per_cols + ["Key", "Label", "Tactic"])].to_csv(persistence_path, index=False)
+
+            print(f"[DEBUG] Saved Label reduced dataset to {label_path}")
+            print(f"[DEBUG] Saved Defense reduced dataset to {defense_path}")
+            print(f"[DEBUG] Saved Persistence reduced dataset to {persistence_path}")
+
+            print("[DEBUG] Launching training + evaluation pipeline...")
 
             df_label = pd.read_csv(label_path)
             df_defense = pd.read_csv(defense_path)
