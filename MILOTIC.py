@@ -938,16 +938,57 @@ class MILOTIC:
         n_def = getN("Defense")
         n_per = getN("Persistence")
 
-        # 5) Run RFE
-        def runRFE(X, y, n):
-            clf = BalancedRandomForestClassifier(n_estimators=400, random_state=42)
-            selector = RFE(estimator=clf, n_features_to_select=n, verbose=1)
-            selector.fit(X, y)
-            return X.columns[selector.support_]
+        # 5) RFE or fallback selector
+        from sklearn.feature_selection import RFE, SelectFromModel
+        import time
 
-        feats_lbl = runRFE(X_tr, y_lbl_tr, n_lbl)
-        feats_def = runRFE(X_tr, y_def_tr, n_def)
-        feats_per = runRFE(X_tr, y_per_tr, n_per)
+        def runRFE(X, y, n, tag="Unknown", fallback=False):
+            print(f"[RFE-{tag}] Starting feature selection: selecting top {n} of {X.shape[1]} features...")
+
+            start_time = time.time()
+            try:
+                clf = BalancedRandomForestClassifier(
+                    n_estimators=100,
+                    sampling_strategy="all",
+                    replacement=True,
+                    bootstrap=False,
+                    random_state=42,
+                    n_jobs=-1
+                )
+
+                if fallback:
+                    selector = SelectFromModel(clf, max_features=n, threshold=-np.inf)
+                    selector.fit(X, y)
+                    selected_feats = X.columns[selector.get_support()]
+                    print(f"[RFE-{tag}] SelectFromModel selected {len(selected_feats)} features.")
+                    return selected_feats
+
+                selector = RFE(
+                    estimator=clf,
+                    n_features_to_select=n,
+                    step=5,
+                    verbose=2
+                )
+
+                selector.fit(X, y)
+                end_time = time.time()
+
+                selected_feats = X.columns[selector.support_]
+                print(f"[RFE-{tag}] Completed RFE in {end_time - start_time:.2f}s. Selected {len(selected_feats)} features.")
+                return selected_feats
+
+            except Exception as e:
+                print(f"[RFE-{tag}] RFE failed: {e}")
+                print(f"[RFE-{tag}] Falling back to SelectFromModel instead.")
+                selector = SelectFromModel(clf, max_features=n, threshold=-np.inf)
+                selector.fit(X, y)
+                selected_feats = X.columns[selector.get_support_()]
+                print(f"[RFE-{tag}] Fallback SelectFromModel selected {len(selected_feats)} features.")
+                return selected_feats
+
+        feats_lbl = runRFE(X_tr, y_lbl_tr, n_lbl, tag="Label")
+        feats_def = runRFE(X_tr, y_def_tr, n_def, tag="Defense")
+        feats_per = runRFE(X_tr, y_per_tr, n_per, tag="Persistence")
 
         # 6) Final training sets
         X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
