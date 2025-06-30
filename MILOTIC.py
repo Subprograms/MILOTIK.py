@@ -910,15 +910,9 @@ class MILOTIC:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 2) Drop only meta-columns (keep all other dynamic features)
-        meta = ["Key","Name","Value","Label","Tactic",
-                "Type","Type Group","Key Name Category","Path Category"]
-        X_all = (
-            df
-            .drop(columns=[c for c in meta if c in df], errors="ignore")
-            .apply(pd.to_numeric, errors="coerce")
-            .fillna(0)
-        )
+        # 2) Drop only Key, Label, and Tactic columns while accounting for all features in RFE
+        ew_cols = ["Key", "Label", "Tactic"]
+        X_all = df.drop(columns=ew_cols, errors="ignore").apply(pd.to_numeric, errors="coerce").fillna(0)
 
         # 3) Ensure standard dummy columns exist
         PATH_CATS = ["Startup Path","Service Path","Network Path","Other Path"]
