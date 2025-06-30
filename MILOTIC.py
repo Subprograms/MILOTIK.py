@@ -862,8 +862,6 @@ class MILOTIC:
             # Write preprocessed version to a file
             self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
             df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
-            self.txtProcessedDatasetPath.delete(0, "end")
-            self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
 
             self.trainAndEvaluateModels(df_raw)
 
