@@ -891,21 +891,21 @@ class MILOTIC:
     
 
     def trainAndEvaluateModels(self, df: pd.DataFrame):
+        from sklearn.metrics import roc_curve
+
         if df.empty:
             raise ValueError("Training dataset is empty")
 
-        # 1) coerce core numeric columns
+        # 1) Coerce numeric columns
         for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 2) build X_all by dropping only the truly non-features
-        non_feats = ["Key", "Label", "Tactic"]
-        X_all = df.drop(columns=[c for c in non_feats if c in df], errors="ignore")
+        # 2) Drop only 'Key', 'Label', 'Tactic'—keep everything else (all your engineered features)
+        X_all = df.drop(columns=[c for c in ("Key", "Label", "Tactic") if c in df], errors="ignore")
         X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        # 3) make sure EVERY dummy (general + specific) is present
-        # 3a) general fixed dummies
+        # 3) Ensure all general dummy columns exist
         PATH_CATS = ["Startup Path","Service Path","Network Path","Other Path"]
         TYPES    = ["REG_SZ","REG_EXPAND_SZ","REG_MULTI_SZ",
                     "REG_DWORD","REG_QWORD","REG_BINARY",
@@ -913,42 +913,42 @@ class MILOTIC:
         NAMES    = ["Run Keys","Service Keys","Security and Configuration Keys",
                     "Internet and Network Keys","File Execution Keys","Other Keys"]
 
-        # add any missing general columns
+        # add missing general dummies
         for p in PATH_CATS:
-            X_all.setdefault(f"PathCategory_{p}", 0)
+            col = f"PathCategory_{p}"
+            if col not in X_all.columns:
+                X_all[col] = 0
         for t in TYPES:
-            X_all.setdefault(f"TypeCategory_{t}", 0)
+            col = f"TypeCategory_{t}"
+            if col not in X_all.columns:
+                X_all[col] = 0
         for n in NAMES:
-            X_all.setdefault(f"NameCategory_{n}", 0)
+            col = f"NameCategory_{n}"
+            if col not in X_all.columns:
+                X_all[col] = 0
 
-        # 3b) specific per-path and per-name columns (Pattern: PathCategory_<part>_Depth<idx> 
-        #     and NameCategory_<cleaned>)
-        specific_cols = [c for c in X_all.columns 
-                         if (c.startswith("PathCategory_") and "_Depth" in c)
-                         or c.startswith("NameCategory_") and c not in [f"NameCategory_{n}" for n in NAMES]]
-        # nothing to add here — we trust that preprocessData created them —
-        # but this ensures they won't get dropped by mistake
+        # (Your per-path "_Depth" and per-name cleaned dummies are already in X_all from preprocessData)
 
-        # 4) build binary targets
+        # 4) Build binary targets
         y_lbl = (df["Label"] == "Malicious").astype(int)
         y_def = (df["Tactic"] == "Defense Evasion").astype(int)
         y_per = (df["Tactic"] == "Persistence").astype(int)
 
-        # 5) split
+        # 5) Train/test split
         X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 6) determine #features from UI %
+        # 6) RFE counts from UI
         def getN(tag):
             txt = self.rfeInputs[tag].get().strip().rstrip('%')
             pct = float(txt) if txt else 0
             return max(1, int(np.ceil((pct/100) * X_tr.shape[1])))
         n_lbl, n_def, n_per = getN("Label"), getN("Defense"), getN("Persistence")
 
-        # 7) run RFE over the full dynamic feature set
+        # 7) Run RFE over all features in X_all
         def runRFE(est, X, y, n):
             sel = RFE(estimator=est, n_features_to_select=n)
             sel.fit(X, y)
@@ -963,7 +963,7 @@ class MILOTIC:
         feats_def = runRFE(base_clf(), X_tr, y_def_tr, n_def)
         feats_per = runRFE(base_clf(), X_tr, y_per_tr, n_per)
 
-        # 8) subset and train final models
+        # 8) Train final models on selected features
         X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
         X_tr_def, X_te_def = X_tr[feats_def], X_te[feats_def]
         X_tr_per, X_te_per = X_tr[feats_per], X_te[feats_per]
@@ -972,7 +972,7 @@ class MILOTIC:
         m_def = base_clf().fit(X_tr_def, y_def_tr)
         m_per = base_clf().fit(X_tr_per, y_per_tr)
 
-        # 9) compute optimal ROC thresholds
+        # 9) Compute ROC‐based thresholds
         def find_thresh(y_true, scores):
             fpr, tpr, thr = roc_curve(y_true, scores)
             dist = np.sqrt((1 - tpr)**2 + fpr**2)
@@ -991,17 +991,16 @@ class MILOTIC:
             "Persistence": thr_per
         }
 
-        # 10) save models with timestamp
+        # 10) Save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-
         joblib.dump(m_lbl, self.sLabelModelPath)
         joblib.dump(m_def, self.sTacticModelPath)
         joblib.dump(m_per, self.sPersistenceModelPath)
 
-        # 11) push metrics into the GUI
+        # 11) Update GUI metrics
         metrics = {}
         for tag, mdl, X_e, y_e, pr in [
             ("Label", m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
@@ -1018,14 +1017,14 @@ class MILOTIC:
 
         self.updateMetricsDisplay(metrics)
 
-        # 12) update feature-importance tabs
+        # 12) Populate feature‐importance tabs
         self.updateFeatureDisplay(
             list(feats_lbl), m_lbl.feature_importances_,
             list(feats_def), m_def.feature_importances_,
             list(feats_per), m_per.feature_importances_
         )
 
-        # 13) draw zoomable trees
+        # 13) Draw zoomable trees
         self.showForestTree(m_lbl,       "Label",      feats_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(m_def,       "Defense",    feats_def, X_tr_def, y_def_tr)
         self.showForestTree(m_per,       "Persistence",feats_per, X_tr_per, y_per_tr)
