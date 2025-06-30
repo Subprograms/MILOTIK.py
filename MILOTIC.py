@@ -876,7 +876,18 @@ class MILOTIC:
                     self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
 
             print("[DEBUG] Launching training + evaluation pipeline...")
-            self.trainAndEvaluateModels(trainingdf)
+
+            # Load the saved reduced datasets
+            base_path = os.path.splitext(self.sTrainingDatasetPath)[0]
+            label_path = base_path + "_label_reduced.csv"
+            defense_path = base_path + "_defense_reduced.csv"
+            persistence_path = base_path + "_persistence_reduced.csv"
+
+            df_label = pd.read_csv(label_path)
+            df_defense = pd.read_csv(defense_path)
+            df_persist = pd.read_csv(persistence_path)
+
+            self.trainAndEvaluateModels(df_label, df_defense, df_persist)
 
         except Exception as e:
             print("[ERROR] executeMLProcess():", e)
