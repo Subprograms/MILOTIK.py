@@ -810,7 +810,7 @@ class MILOTIC:
     def executeMLProcess(self):
         """
         Loads training dataset, cleans, performs early top-500 reduction per model,
-        writes preprocessed dataset, and runs ML pipeline.
+        writes preprocessed dataset if needed, and runs ML pipeline.
         """
         try:
             if not self.sTrainingDatasetPath:
@@ -827,10 +827,14 @@ class MILOTIC:
 
             print("[DEBUG] CSV Loaded: shape =", df_raw.shape)
 
-            if all(col in df_raw.columns for col in ("Depth", "Key Size", "Value Processed")):
+            is_preprocessed = all(col in df_raw.columns for col in ("Depth", "Key Size", "Value Processed"))
+
+            if is_preprocessed:
                 print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
             else:
+                print("[DEBUG] Starting cleaning pipeline...")
                 df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
+                print("[DEBUG] Cleaning complete. Shape:", df_raw.shape)
 
             # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
             print("[DEBUG] Starting early tree-based feature reduction (per model)...")
@@ -854,25 +858,27 @@ class MILOTIC:
             print(f"[DEBUG] Top Persistence features: {len(top_per_cols)}")
 
             # Save 3 reduced CSVs for RFE and model training
-            all_keep = {
-                "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
-                "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
-                "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
-            }
+            if not is_preprocessed:
+                all_keep = {
+                    "Label":       sorted(set(top_lbl_cols + ["Key", "Label", "Tactic"])),
+                    "Defense":     sorted(set(top_def_cols + ["Key", "Label", "Tactic"])),
+                    "Persistence": sorted(set(top_per_cols + ["Key", "Label", "Tactic"]))
+                }
 
-            for tag, cols in all_keep.items():
-                out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
-                df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
-                print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
+                for tag, cols in all_keep.items():
+                    out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
+                    df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
+                    print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
 
-            # Replace main dataframe with the full raw (GUI downstream will use RFE-specific subset)
-            self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
-            df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
-            if hasattr(self, 'txtProcessedDatasetPath'):
-                self.txtProcessedDatasetPath.delete(0, "end")
-                self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
+                self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
+                df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
+                if hasattr(self, 'txtProcessedDatasetPath'):
+                    self.txtProcessedDatasetPath.delete(0, "end")
+                    self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
 
+            print("[DEBUG] Launching training + evaluation pipeline...")
             self.trainAndEvaluateModels(df_raw)
+            print("[INFO] ML pipeline completed successfully.")
 
         except Exception as e:
             print("[ERROR] executeMLProcess():", e)
