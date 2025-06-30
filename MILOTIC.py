@@ -882,16 +882,24 @@ class MILOTIC:
         if df.empty:
             raise ValueError("Training dataset is empty")
 
-        # 1) Coerce our known numerics
+        # 1) Coerce known numeric columns
         for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
         # 2) Drop Key, Label, Tactic columns from feature set for RFE
-        drop_cols = ["Key", "Label", "Tactic"]
-        X_all = df.drop(columns=drop_cols, errors="ignore") \
-                  .apply(pd.to_numeric, errors="coerce") \
-                  .fillna(0)
+        print("[DEBUG] Dropping Key/Label/Tactic from features...")
+        drop_cols = [c for c in ("Key", "Label", "Tactic") if c in df.columns]
+        X_all = df.drop(columns=drop_cols, errors="ignore")
+
+        print(f"[DEBUG] Remaining feature columns: {len(X_all.columns)}")
+        print("[DEBUG] Running pd.to_numeric for all features...")
+
+        # Use looped version to avoid apply-based freeze
+        for col in X_all.columns:
+            X_all[col] = pd.to_numeric(X_all[col], errors="coerce")
+
+        X_all.fillna(0, inplace=True)
         print("[ML] Features into RFE:", list(X_all.columns))
 
         # 3) Build target vectors
@@ -918,7 +926,8 @@ class MILOTIC:
 
         # 6) Run RFE to pick top-N features
         def runRFE(est, X, y, n):
-            selector = RFE(estimator=est, n_features_to_select=n)
+            print(f"[INFO] Running RFE for top {n} features on {X.shape[1]} total...")
+            selector = RFE(estimator=est, n_features_to_select=n, verbose=1)
             selector.fit(X, y)
             print(f"[INFO] RFE selected {selector.support_.sum()} / {X.shape[1]} features")
             return X.columns[selector.support_]
@@ -936,7 +945,7 @@ class MILOTIC:
         feats_def = runRFE(base_clf(), X_tr, y_def_tr, n_def)
         feats_per = runRFE(base_clf(), X_tr, y_per_tr, n_per)
 
-        # 7) Train final models on the selected features
+        # 7) Train final models on selected features
         X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
         X_tr_def, X_te_def = X_tr[feats_def], X_te[feats_def]
         X_tr_per, X_te_per = X_tr[feats_per], X_te[feats_per]
