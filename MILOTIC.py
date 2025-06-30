@@ -16,6 +16,7 @@ from regipy import RegistryHive
 from datetime import datetime
 from sklearn import tree
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
+from sklearn.ensemble import RandomForestClassifier
 from imblearn.ensemble import BalancedRandomForestClassifier
 from sklearn.model_selection import (
     train_test_split, GridSearchCV, StratifiedKFold
@@ -458,10 +459,8 @@ class MILOTIC:
             source_is_hive = bool(self.sHivePath and os.path.exists(self.sHivePath))
 
             if source_is_hive:
-                # parse hive into raw rows
                 df_raw = self.parseRegistry(self.sHivePath)
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
-                # load raw CSV _without_ overwriting it
                 df_raw = self.safe_read_csv(self.sRawParsedCsvPath)
             else:
                 raise FileNotFoundError("No valid Hive Path or Raw Parsed CSV provided.")
@@ -471,28 +470,28 @@ class MILOTIC:
             df_labeled = self.applyLabels(df_clean)
 
             # 3) SAVE / UPDATE RAW-LABELED CSV
-            # if we started from a hive, append into your existing rawParsedCsvPath if set,
-            # otherwise just keep the hive logic.
             if not source_is_hive:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 new_raw = os.path.join(self.sModelOutputDir, f"raw_labeled_{ts}.csv")
                 df_labeled.to_csv(new_raw, index=False)
                 self.sRawParsedCsvPath = new_raw
-                # update the Raw Parsed CSV input field
                 self.rawParsedCsvInput.delete(0, tk.END)
                 self.rawParsedCsvInput.insert(0, new_raw)
                 print(f"Created new raw-labeled CSV: {new_raw}")
 
             # 4) PREPROCESS -> TRAINING DATASET
-            df_preproc = self.preprocessData(df_labeled)
-            df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
+            if any(col in df_labeled.columns for col in ("Name", "Value", "Type")):
+                df_preproc = self.preprocessData(df_labeled)
+                df_preproc = df_preproc[self.selectTrainingColumns(df_preproc)]
+            else:
+                print("[makeDataset] Input appears preprocessed — skipping `preprocessData()`.")
+                df_preproc = df_labeled[self.selectTrainingColumns(df_labeled)]
 
             # 5) SAVE TRAINING DATASET AND UPDATE UI FIELD
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             new_train = os.path.join(self.sModelOutputDir, f"training_dataset_{ts}.csv")
             df_preproc.to_csv(new_train, index=False)
             self.sTrainingDatasetPath = new_train
-            # update the Training Dataset input field
             self.trainingDatasetInput.delete(0, tk.END)
             self.trainingDatasetInput.insert(0, new_train)
             messagebox.showinfo("Dataset Created", f"New training dataset:\n{new_train}")
@@ -667,9 +666,8 @@ class MILOTIC:
         """
         Creates engineered columns, one-hot encodes them with uniform prefixes,
         then re-indexes so every expected dummy column exists (all-zero where absent),
-        and finally scales numeric fields.
+        and finally scales numeric fields. Rare dummy columns are grouped or dropped.
         """
-        # guard against missing columns
         for col in ("Name", "Value", "Type"):
             if col not in df.columns:
                 df[col] = "0"
@@ -678,7 +676,6 @@ class MILOTIC:
             return pd.DataFrame()
 
         xdf = df.copy()
-        # drop any leftover TagHit flag
         xdf.drop(columns=["TagHit"], inplace=True, errors="ignore")
 
         # 1) original engineered columns
@@ -699,36 +696,52 @@ class MILOTIC:
             "REG_NONE", "REG_LINK"
         ]
 
-        # 3) helper for fixed-order dummies
         def fixedDummies(series, prefix, full):
             d = pd.get_dummies(series, prefix=prefix)
             need_cols = [f"{prefix}_{c}" for c in full]
             return d.reindex(columns=need_cols, fill_value=0)
 
-        # 4) general category dummies (all grouped together)
+        # 3) general category dummies
         df_general = pd.concat([
             fixedDummies(xdf["Path Category"],     "PathCategory",  PATH_CATS),
-            fixedDummies(xdf["Type"],               "TypeCategory",  KNOWN_TYPES),
-            fixedDummies(xdf["Key Name Category"],  "NameCategory",  KEYNAME_C),
+            fixedDummies(xdf["Type"],              "TypeCategory",  KNOWN_TYPES),
+            fixedDummies(xdf["Key Name Category"], "NameCategory",  KEYNAME_C),
         ], axis=1)
 
-        # 5) specific per-path and per-name features
+        # 4) specific per-path and per-name features
+        from collections import Counter
+
+        # Limit high-cardinality PathCategory_*_Depth features
+        path_parts_counter = Counter()
+        for p in xdf["Key"]:
+            parts = [part for part in p.strip("\\").split("\\") if part]
+            path_parts_counter.update(parts)
+
+        common_parts = set(k for k, v in path_parts_counter.items() if v >= 5)
+
         def makeSpecificPathFeatures(p):
             parts = [part for part in p.strip("\\").split("\\") if part]
-            out = {f"PathCategory_{part}_Depth{i}": 1 
-                   for i, part in enumerate(parts)}
+            out = {}
+            for i, part in enumerate(parts):
+                key = part if part in common_parts else "Other"
+                out[f"PathCategory_{key}_Depth{i}"] = 1
             return pd.Series(out, dtype="float64")
+
+        # Limit high-cardinality NameCategory_* features
+        name_counter = Counter(xdf["Name"])
+        common_names = set(k for k, v in name_counter.items() if v >= 5)
 
         def makeSpecificKeynameFeatures(n):
             if not isinstance(n, str):
                 return pd.Series(dtype="float64")
-            cleaned = re.sub(r"[^\w]", "_", n.strip())
+            name = n if n in common_names else "Other"
+            cleaned = re.sub(r"[^\w]", "_", name.strip())
             return pd.Series({f"NameCategory_{cleaned}": 1}, dtype="float64")
 
         path_feats = xdf["Key"].apply(makeSpecificPathFeatures).fillna(0)
         name_feats = xdf["Name"].apply(makeSpecificKeynameFeatures).fillna(0)
 
-        # 6) assemble everything, dropping the old helper columns
+        # 5) combine all feature sets
         xdf = pd.concat([
             xdf.drop(columns=["Path Category", "Key Name Category"], errors="ignore"),
             df_general,
@@ -736,13 +749,17 @@ class MILOTIC:
             name_feats
         ], axis=1)
 
-        # 7) scale numeric fields
+        # 6) scale numeric fields
         for col in ["Depth", "Value Count", "Value Processed"]:
             if col in xdf.columns:
                 xdf[[col]] = MinMaxScaler().fit_transform(xdf[[col]])
         for col in ["Key Size", "Subkey Count"]:
             if col in xdf.columns:
                 xdf[[col]] = RobustScaler().fit_transform(xdf[[col]])
+
+        # 7) drop ultra-sparse dummy columns (appear < 5 times total)
+        dummy_thresh = 5
+        xdf = xdf.loc[:, (xdf != 0).sum(axis=0) >= dummy_thresh]
 
         return xdf
 
@@ -816,29 +833,55 @@ class MILOTIC:
             # ----------  build / load training dataframe  ---------------
             if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
                 print("[ML] Using supplied training dataset.")
+                print("[DEBUG] Reading CSV...")
                 df_raw = self.safe_read_csv(self.sTrainingDatasetPath)
+                print(f"[DEBUG] CSV Loaded: shape = {df_raw.shape}")
 
-                if {"Key", "Name", "Type"}.issubset(df_raw.columns):
-                    df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
-                                                  preserve_labels=True)
+                if any(col in df_raw.columns for col in ("Name", "Value", "Type")):
+                    print("[DEBUG] Raw registry format detected. Cleaning and preprocessing...")
+                    df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
                     df_raw = self.preprocessData(df_raw)
+                    df_raw = df_raw[self.selectTrainingColumns(df_raw)]
+                else:
+                    print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
 
             elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
                 print("[ML] Pre-processing raw-parsed CSV …")
+                print("[DEBUG] Reading raw-parsed CSV...")
                 tmp = self.safe_read_csv(self.sRawParsedCsvPath)
-                tmp = self.cleanDataframe(tmp, drop_all_zero_rows=True,
-                                           preserve_labels=True)
-                df_raw = self.preprocessData(tmp)
+                print(f"[DEBUG] CSV Loaded: shape = {tmp.shape}")
 
+                print("[DEBUG] Cleaning raw data...")
+                tmp = self.cleanDataframe(tmp, drop_all_zero_rows=True, preserve_labels=True)
+
+                print("[DEBUG] Preprocessing data...")
+                df_raw = self.preprocessData(tmp)
+                df_raw = df_raw[self.selectTrainingColumns(df_raw)]
             else:
                 raise FileNotFoundError("No training dataset or raw-parsed CSV found.")
 
-            # ----------  tidy columns  ----------------------------------
             if df_raw.columns.duplicated().any():
-                df_raw = df_raw.groupby(axis=1, level=0).first()
+                print("[WARNING] Duplicate columns found. Resolving...")
+                df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
 
-            df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True,
-                                         preserve_labels=True)
+            print("[DEBUG] Final cleaned shape before training:", df_raw.shape)
+
+            # ------------------ EARLY FEATURE REDUCTION -----------------------
+            print("[DEBUG] Starting early tree-based feature reduction...")
+
+            X_all = df_raw.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
+            X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
+            y_lbl = (df_raw.get("Label") == "Malicious").astype(int)
+
+            rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            rf.fit(X_all, y_lbl)
+            importances = rf.feature_importances_
+
+            top_500_idx = np.argsort(importances)[-500:]
+            top_500_cols = X_all.columns[top_500_idx]
+
+            print(f"[DEBUG] Selected top 500 columns: {len(top_500_cols)}")
+            df_raw = df_raw[top_500_cols.tolist() + ["Key", "Label", "Tactic"]]
 
             # ----------  choose CSV to classify if user omitted it  -----
             if not classify_ready:
@@ -846,15 +889,16 @@ class MILOTIC:
                 print("[ML] No classify CSV provided -> will classify training set.")
 
             # ----------  train -> evaluate -> save models  --------------
+            print("[DEBUG] Launching training pipeline...")
             self.trainAndEvaluateModels(df_raw)
 
             # ----------  classify the chosen CSV  -----------------------
             self.classifyCsv(self.sClassifyCsvPath)
-            messagebox.showinfo("ML Process Complete",
-                                "Training + classification finished!")
+            messagebox.showinfo("ML Process Complete", "Training + classification finished!")
 
         except Exception as exc:
             messagebox.showerror("Error in ML process", str(exc))
+
 
     ###########################################################################
     #            TRAIN AND EVALUATE MODELS
@@ -872,12 +916,11 @@ class MILOTIC:
         dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
         return thr[np.argmin(dist)]
     
-
     def trainAndEvaluateModels(self, df: pd.DataFrame):
         """
-        RFE -> train three BRF models -> evaluate & push metrics to GUI ->
-        compute/store optimal ROC thresholds -> dump .joblib models ->
-        update feature-importance tabs -> draw zoomable trees.
+        Run RFE on pre-reduced feature set -> train three BRF models -> evaluate &
+        push metrics to GUI -> compute/store optimal ROC thresholds -> dump .joblib
+        models -> update feature-importance tabs -> draw zoomable trees.
         """
         if df.empty:
             raise ValueError("Training dataset is empty")
@@ -887,34 +930,23 @@ class MILOTIC:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 2) Drop Key, Label, Tactic columns from feature set for RFE
-        print("[DEBUG] Dropping Key/Label/Tactic from features...")
-        drop_cols = [c for c in ("Key", "Label", "Tactic") if c in df.columns]
+        # 2) Prepare features and labels
+        drop_cols = ["Key", "Label", "Tactic"]
         X_all = df.drop(columns=drop_cols, errors="ignore")
-
-        print(f"[DEBUG] Remaining feature columns: {len(X_all.columns)}")
-        print("[DEBUG] Running pd.to_numeric for all features...")
-
-        # Use looped version to avoid apply-based freeze
         for col in X_all.columns:
             X_all[col] = pd.to_numeric(X_all[col], errors="coerce")
-
         X_all.fillna(0, inplace=True)
-        print("[ML] Features into RFE:", list(X_all.columns))
 
-        # 3) Build target vectors
         y_lbl = (df.get("Label") == "Malicious").astype(int)
         y_def = (df.get("Tactic") == "Defense Evasion").astype(int)
         y_per = (df.get("Tactic") == "Persistence").astype(int)
 
-        # 4) Stratified train/test split
-        X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(
-            X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
-        )
+        # 3) Train-test split
+        X_tr, X_te, y_lbl_tr, y_lbl_te = train_test_split(X_all, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42)
         y_def_tr, y_def_te = y_def.loc[X_tr.index], y_def.loc[X_te.index]
         y_per_tr, y_per_te = y_per.loc[X_tr.index], y_per.loc[X_te.index]
 
-        # 5) Determine number features for RFE from the RFE % inputs
+        # 4) RFE % configuration
         def getN(tag):
             txt = self.rfeInputs[tag].get().strip().rstrip("%")
             pct = float(txt) if txt else 0.0
@@ -924,37 +956,33 @@ class MILOTIC:
         n_def = getN("Defense")
         n_per = getN("Persistence")
 
-        # 6) Run RFE to pick top-N features
-        def runRFE(est, X, y, n):
-            print(f"[INFO] Running RFE for top {n} features on {X.shape[1]} total...")
-            selector = RFE(estimator=est, n_features_to_select=n, verbose=1)
+        # 5) Run RFE
+        def runRFE(X, y, n):
+            clf = BalancedRandomForestClassifier(n_estimators=400, random_state=42)
+            selector = RFE(estimator=clf, n_features_to_select=n, verbose=1)
             selector.fit(X, y)
-            print(f"[INFO] RFE selected {selector.support_.sum()} / {X.shape[1]} features")
             return X.columns[selector.support_]
 
-        base_clf = lambda: BalancedRandomForestClassifier(
-            sampling_strategy="all",
-            replacement=True,
-            bootstrap=False,
-            n_estimators=400,
-            max_depth=None,
-            random_state=42
-        )
+        feats_lbl = runRFE(X_tr, y_lbl_tr, n_lbl)
+        feats_def = runRFE(X_tr, y_def_tr, n_def)
+        feats_per = runRFE(X_tr, y_per_tr, n_per)
 
-        feats_lbl = runRFE(base_clf(), X_tr, y_lbl_tr, n_lbl)
-        feats_def = runRFE(base_clf(), X_tr, y_def_tr, n_def)
-        feats_per = runRFE(base_clf(), X_tr, y_per_tr, n_per)
-
-        # 7) Train final models on selected features
+        # 6) Final training sets
         X_tr_lbl, X_te_lbl = X_tr[feats_lbl], X_te[feats_lbl]
         X_tr_def, X_te_def = X_tr[feats_def], X_te[feats_def]
         X_tr_per, X_te_per = X_tr[feats_per], X_te[feats_per]
 
-        m_lbl = base_clf().fit(X_tr_lbl, y_lbl_tr)
-        m_def = base_clf().fit(X_tr_def, y_def_tr)
-        m_per = base_clf().fit(X_tr_per, y_per_tr)
+        clf = lambda: BalancedRandomForestClassifier(
+            n_estimators=400, random_state=42,
+            sampling_strategy="all", replacement=True,
+            bootstrap=False
+        )
 
-        # 8) Compute ROC-based optimal thresholds
+        m_lbl = clf().fit(X_tr_lbl, y_lbl_tr)
+        m_def = clf().fit(X_tr_def, y_def_tr)
+        m_per = clf().fit(X_tr_per, y_per_tr)
+
+        # 7) Compute optimal thresholds
         def find_thresh(y_true, scores):
             fpr, tpr, thr = roc_curve(y_true, scores)
             dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
@@ -964,29 +992,22 @@ class MILOTIC:
         prob_def = m_def.predict_proba(X_te_def)[:, 1]
         prob_per = m_per.predict_proba(X_te_per)[:, 1]
 
-        thr_lbl = find_thresh(y_lbl_te, prob_lbl)
-        thr_def = find_thresh(y_def_te, prob_def)
-        thr_per = find_thresh(y_per_te, prob_per)
-
         self.optimal_thresholds = {
-            "Label":       thr_lbl,
-            "Defense":     thr_def,
-            "Persistence": thr_per
+            "Label":       find_thresh(y_lbl_te, prob_lbl),
+            "Defense":     find_thresh(y_def_te, prob_def),
+            "Persistence": find_thresh(y_per_te, prob_per)
         }
-        print(f"[INFO] Thresholds -> Label: {thr_lbl:.4f}, Defense: {thr_def:.4f}, Persistence: {thr_per:.4f}")
 
-        # 9) Save models
+        # 8) Save models
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
         self.sPersistenceModelPath = os.path.join(self.sModelOutputDir, f"persistence_model_{ts}.joblib")
-
         joblib.dump(m_lbl, self.sLabelModelPath)
         joblib.dump(m_def, self.sTacticModelPath)
         joblib.dump(m_per, self.sPersistenceModelPath)
-        print("[INFO] Models saved.")
 
-        # 10) Evaluate and push metrics into the GUI
+        # 9) Push metrics
         all_metrics = {}
         for tag, mdl, X_e, y_e, pr in [
             ("Label",       m_lbl, X_te_lbl, y_lbl_te, prob_lbl),
@@ -1002,14 +1023,14 @@ class MILOTIC:
 
         self.updateMetricsDisplay(all_metrics)
 
-        # 11) Populate feature-importance tabs
+        # 10) Feature tab display
         self.updateFeatureDisplay(
             list(feats_lbl), m_lbl.feature_importances_,
             list(feats_def), m_def.feature_importances_,
             list(feats_per), m_per.feature_importances_,
         )
 
-        # 12) Draw zoomable trees for each model
+        # 11) Visualize top trees
         self.showForestTree(m_lbl,      "Label",       feats_lbl, X_tr_lbl, y_lbl_tr)
         self.showForestTree(m_def,      "Defense",     feats_def, X_tr_def, y_def_tr)
         self.showForestTree(m_per,      "Persistence", feats_per, X_tr_per, y_per_tr)
