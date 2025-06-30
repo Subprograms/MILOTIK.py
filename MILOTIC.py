@@ -904,27 +904,26 @@ class MILOTIC:
     
     def trainAndEvaluateModels(self, df_label: pd.DataFrame, df_defense: pd.DataFrame, df_persist: pd.DataFrame):
         """
-        Accepts three reduced dataframes (top 100 each): label, defense, persistence.
+        Accepts three reduced dataframes (top k each): label, defense, persistence.
         Runs SMOTE -> RFE -> trains BRF models -> evaluates -> updates GUI.
         """
-
         from sklearn.feature_selection import RFE, SelectFromModel
         from imblearn.over_sampling import SMOTE
         from sklearn.metrics import roc_curve
         import time
+        import numpy as np
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
+        # helper to prepare X, y for each task
         def prepare(df, task):
             print(f"[DEBUG-{task}] Preparing data...")
             df = df.copy()
-            # Ensure numeric columns
             for col in ["Depth", "Key Size", "Subkey Count", "Value Count", "Value Processed"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-            # Drop meta columns
             drop_cols = ["Key", "Label", "Tactic"]
             X = df.drop(columns=drop_cols, errors="ignore")
             X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
-            # Define y
             if task == "Label":
                 y = (df["Label"] == "Malicious").astype(int)
             elif task == "Defense":
@@ -933,11 +932,13 @@ class MILOTIC:
                 y = (df["Tactic"] == "Persistence").astype(int)
             return X, y
 
+        # helper to read RFE % from UI
         def getN(tag, X):
             txt = self.rfeInputs[tag].get().strip().rstrip("%")
             pct = float(txt) if txt else 0.0
             return max(1, int(np.ceil((pct / 100) * X.shape[1])))
 
+        # helper to run RFE with fallback
         def runRFE(X, y, n, tag="Unknown", fallback=False):
             print(f"[RFE-{tag}] Selecting top {n} of {X.shape[1]} features...")
             start_time = time.time()
@@ -974,13 +975,13 @@ class MILOTIC:
                 print(f"[RFE-{tag}] Fallback selected {len(selected)} features.")
                 return selected
 
-        # 1) Prepare data
+        # 1) Prepare data for each task
         print("[DEBUG] Preprocessing all three reduced datasets...")
         X_lbl, y_lbl = prepare(df_label, "Label")
         X_def, y_def = prepare(df_defense, "Defense")
         X_per, y_per = prepare(df_persist, "Persistence")
 
-        # 2) Split train/test
+        # 2) Split train/test sets
         print("[DEBUG] Splitting train/test sets...")
         X_lbl_tr, X_lbl_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_lbl, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
@@ -1070,9 +1071,9 @@ class MILOTIC:
         # 10) Update feature importances in GUI
         print("[DEBUG] Updating feature tab display...")
         self.updateFeatureDisplay(
-            list(feats_lbl), m_lbl.feature_importances_,
-            list(feats_def), m_def.feature_importances_,
-            list(feats_per), m_per.feature_importances_,
+            feats_lbl, m_lbl.feature_importances_,
+            feats_def, m_def.feature_importances_,
+            feats_per, m_per.feature_importances_,
         )
 
         # 11) Render zoomable trees
@@ -1134,16 +1135,13 @@ class MILOTIC:
         return gs.best_estimator_
 
     def showForestTree(self, forest, tag: str, feature_names, X_train, y_train):
-        """
-        Render the best tree from `forest` into the zoomable canvas
-        for the given tag.  Always reset to a uniform default zoom
-        that fits the canvas width exactly.
-        """
-        # pick the best single tree (highest trainset score)
-        scores = [est.score(X_train, y_train) for est in forest.estimators_]
-        best = forest.estimators_[int(np.argmax(scores))]
+        print(f"[DEBUG] showForestTree({tag}) about to redraw canvas")
 
-        # plot it at high resolution
+        # pick the single best tree (highest train‐score)
+        scores = [est.score(X_train, y_train) for est in forest.estimators_]
+        best   = forest.estimators_[int(np.argmax(scores))]
+
+        # plot at very high resolution
         rcParams.update({"font.size": 9})
         fig, ax = plt.subplots(figsize=(24, 16), dpi=600)
         tree.plot_tree(
@@ -1152,48 +1150,47 @@ class MILOTIC:
             class_names=["Benign/Pure", "Positive"],
             filled=True, rounded=True,
             impurity=False, proportion=False,
-            max_depth=5,  # cap depth
+            max_depth=5,
             ax=ax
         )
         ax.axis("off")
         fig.tight_layout(pad=0.3)
 
-        # grab it into a Pillow image
+        # capture as Pillow image
         buf = BytesIO()
         fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
         pil_full = Image.open(buf)
 
+        # swap in the scrollable Canvas if first time
         self.zoomCanvas(tag)
-        rec = self._tree_canvases[tag]
+        rec  = self._tree_canvases[tag]
         canv = rec["canvas"]
 
-        # reset any old scale
-        rec["scale"] = 1.0
+        # reset stored scale & full bitmap
+        rec["scale"]    = 1.0
         rec["pil_orig"] = pil_full
 
         canv.update_idletasks()
-
         cw = canv.winfo_width()
-        if cw <= 1:
-            fit_scale = 1.0
-        else:
-            fit_scale = cw / pil_full.width
-
+        fit_scale = cw / pil_full.width if cw > 1 else 1.0
         rec["scale"] = fit_scale
-        new_w  = int(pil_full.width  * fit_scale)
-        new_h  = int(pil_full.height * fit_scale)
 
+        new_w = int(pil_full.width  * fit_scale)
+        new_h = int(pil_full.height * fit_scale)
         resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-        preview = pil_full.resize((new_w, new_h), resample)
-        tk_img  = ImageTk.PhotoImage(preview)
+        preview  = pil_full.resize((new_w, new_h), resample)
+        tk_img   = ImageTk.PhotoImage(preview)
         rec["tk_img"] = tk_img
 
-        # draw
+        # draw into Canvas
         canv.delete("all")
         canv.create_image(0, 0, anchor="nw", image=tk_img)
         canv.config(scrollregion=(0, 0, new_w, new_h))
+
+        # force redraw
+        self.root.update_idletasks()
     
     ###########################################################################
     #                    CLASSIFY CSV
@@ -1280,20 +1277,21 @@ class MILOTIC:
     #                       UPDATING
     ###########################################################################
     def updateMetricsDisplay(self, metrics):
+        print("[DEBUG] updateMetricsDisplay called with:", metrics)
+        # clear out all existing rows
         self.metricsList.delete(*self.metricsList.get_children())
+        # repopulate with fresh values
         for metric, val in metrics.items():
             self.metricsList.insert("", "end", values=(metric, val))
+        # force Tkinter to redraw immediately
+        self.root.update_idletasks()
                 
     def updateFeatureDisplay(self,
                              lbl_feats, lbl_imps,
                              def_feats, def_imps,
                              per_feats, per_imps):
-        """
-        Populate the three tabs with feature importances for
-        Label, Defense-Evasion, and Persistence models.
-        """
-
-        # clear all three trees
+        print("[DEBUG] updateFeatureDisplay called")
+        # clear all three feature-tabs
         for tv in self.featureTabsTabs.values():
             tv.delete(*tv.get_children())
 
@@ -1308,6 +1306,9 @@ class MILOTIC:
         # Persistence tab
         for f, imp in sorted(zip(per_feats, per_imps), key=lambda x: x[1], reverse=True):
             self.featureTabsTabs["Persistence"].insert("", "end", values=(f, f"{imp:.4f}"))
+
+        # force redraw
+        self.root.update_idletasks()
 
 ###########################################################################
 #                       MAIN
