@@ -818,21 +818,21 @@ class MILOTIC:
                 return
 
             print("[ML] Using supplied training dataset.")
-            df_raw = pd.read_csv(self.sTrainingDatasetPath, dtype=str, engine="python", on_bad_lines="skip")
+            trainingdf = pd.read_csv(self.sTrainingDatasetPath, dtype=str, engine="python", on_bad_lines="skip")
 
             print("[DEBUG] Reading CSV...")
-            if df_raw.columns.duplicated().any():
+            if trainingdf.columns.duplicated().any():
                 print("[WARNING] Duplicate columns found. Resolving...")
-                df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
+                trainingdf = trainingdf.loc[:, ~trainingdf.columns.duplicated()]
 
-            print("[DEBUG] CSV Loaded: shape =", df_raw.shape)
+            print("[DEBUG] CSV Loaded: shape =", trainingdf.shape)
 
-            is_preprocessed = all(col in df_raw.columns for col in ("Depth", "Key Size", "Value Processed"))
+            is_preprocessed = all(col in trainingdf.columns for col in ("Depth", "Key Size", "Value Processed"))
 
             if is_preprocessed:
                 print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
             else:
-                df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
+                trainingdf = self.cleanDataframe(trainingdf, drop_all_zero_rows=True, preserve_labels=True)
 
             # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
             print("[DEBUG] Starting early tree-based feature reduction (per model)...")
@@ -847,9 +847,9 @@ class MILOTIC:
                 top_100_idx = np.argsort(rf.feature_importances_)[-100:]
                 return list(X.columns[top_100_idx])
 
-            top_lbl_cols = get_top_100(df_raw, "Label", "Malicious")
-            top_def_cols = get_top_100(df_raw, "Tactic", "Defense Evasion")
-            top_per_cols = get_top_100(df_raw, "Tactic", "Persistence")
+            top_lbl_cols = get_top_100(trainingdf, "Label", "Malicious")
+            top_def_cols = get_top_100(trainingdf, "Tactic", "Defense Evasion")
+            top_per_cols = get_top_100(trainingdf, "Tactic", "Persistence")
 
             print(f"[DEBUG] Top Label features: {len(top_lbl_cols)}")
             print(f"[DEBUG] Top Defense features: {len(top_def_cols)}")
@@ -864,19 +864,19 @@ class MILOTIC:
 
             for tag, cols in all_keep.items():
                 out_path = os.path.splitext(self.sTrainingDatasetPath)[0] + f"_{tag.lower()}_reduced.csv"
-                df_raw.loc[:, df_raw.columns.intersection(cols)].to_csv(out_path, index=False)
+                trainingdf.loc[:, trainingdf.columns.intersection(cols)].to_csv(out_path, index=False)
                 print(f"[DEBUG] Saved {tag} reduced dataset to {out_path}")
 
             # Only save preprocessed version if it was originally raw
             if not is_preprocessed:
                 self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
-                df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
+                trainingdf.to_csv(self.sPreprocessedCsvPath, index=False)
                 if hasattr(self, 'txtProcessedDatasetPath'):
                     self.txtProcessedDatasetPath.delete(0, "end")
                     self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
 
             print("[DEBUG] Launching training + evaluation pipeline...")
-            self.trainAndEvaluateModels(df_raw)
+            self.trainAndEvaluateModels(trainingdf)
 
         except Exception as e:
             print("[ERROR] executeMLProcess():", e)
