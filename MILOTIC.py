@@ -809,96 +809,67 @@ class MILOTIC:
     ###########################################################################
     def executeMLProcess(self):
         """
-        If all three model paths and a CSV-to-classify are supplied,
-        skip training and go straight to classification.
-        Otherwise run the full train-->-classify pipeline.
+        Loads training dataset, cleans, reduces top 500 features for each model,
+        writes preprocessed training dataset, and begins ML training pipeline.
         """
         try:
-            # ----------  fast-path: pre-trained models + CSV  ----------
-            models_ready = all([
-                self.sLabelModelPath       and os.path.exists(self.sLabelModelPath),
-                self.sTacticModelPath      and os.path.exists(self.sTacticModelPath),
-                self.sPersistenceModelPath and os.path.exists(self.sPersistenceModelPath)
-            ])
-            classify_ready = (
-                self.sClassifyCsvPath and os.path.exists(self.sClassifyCsvPath)
-            )
-
-            if models_ready and classify_ready:
-                print("[ML] Found three models + CSV -> skipping training.")
-                self.classifyCsv(self.sClassifyCsvPath)
-                messagebox.showinfo("ML Process Complete", "Classification finished!")
+            if not self.sTrainingDatasetPath:
+                messagebox.showerror("Missing Input", "Please select a training dataset first.")
                 return
 
-            # ----------  build / load training dataframe  ---------------
-            if self.sTrainingDatasetPath and os.path.exists(self.sTrainingDatasetPath):
-                print("[ML] Using supplied training dataset.")
-                print("[DEBUG] Reading CSV...")
-                df_raw = self.safe_read_csv(self.sTrainingDatasetPath)
-                print(f"[DEBUG] CSV Loaded: shape = {df_raw.shape}")
+            print("[ML] Using supplied training dataset.")
+            df_raw = pd.read_csv(self.sTrainingDatasetPath, dtype=str, engine="python", on_bad_lines="skip")
 
-                if any(col in df_raw.columns for col in ("Name", "Value", "Type")):
-                    print("[DEBUG] Raw registry format detected. Cleaning and preprocessing...")
-                    df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
-                    df_raw = self.preprocessData(df_raw)
-                    df_raw = df_raw[self.selectTrainingColumns(df_raw)]
-                else:
-                    print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
-
-            elif self.sRawParsedCsvPath and os.path.exists(self.sRawParsedCsvPath):
-                print("[ML] Pre-processing raw-parsed CSV …")
-                print("[DEBUG] Reading raw-parsed CSV...")
-                tmp = self.safe_read_csv(self.sRawParsedCsvPath)
-                print(f"[DEBUG] CSV Loaded: shape = {tmp.shape}")
-
-                print("[DEBUG] Cleaning raw data...")
-                tmp = self.cleanDataframe(tmp, drop_all_zero_rows=True, preserve_labels=True)
-
-                print("[DEBUG] Preprocessing data...")
-                df_raw = self.preprocessData(tmp)
-                df_raw = df_raw[self.selectTrainingColumns(df_raw)]
-            else:
-                raise FileNotFoundError("No training dataset or raw-parsed CSV found.")
-
+            print("[DEBUG] Reading CSV...")
             if df_raw.columns.duplicated().any():
                 print("[WARNING] Duplicate columns found. Resolving...")
                 df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
 
-            print("[DEBUG] Final cleaned shape before training:", df_raw.shape)
+            print("[DEBUG] CSV Loaded: shape =", df_raw.shape)
+
+            if all(col in df_raw.columns for col in ("Depth", "Key Size", "Value Processed")):
+                print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
+            else:
+                df_raw = self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
 
             # ------------------ EARLY FEATURE REDUCTION -----------------------
             print("[DEBUG] Starting early tree-based feature reduction...")
 
-            X_all = df_raw.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
-            X_all = X_all.apply(pd.to_numeric, errors="coerce").fillna(0)
-            y_lbl = (df_raw.get("Label") == "Malicious").astype(int)
+            def get_top_500(df_raw, target_col, target_val):
+                X = df_raw.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
+                X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
+                y = (df_raw.get(target_col) == target_val).astype(int)
 
-            rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-            rf.fit(X_all, y_lbl)
-            importances = rf.feature_importances_
+                rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+                rf.fit(X, y)
+                top_500_idx = np.argsort(rf.feature_importances_)[-500:]
+                return X.columns[top_500_idx].tolist()
 
-            top_500_idx = np.argsort(importances)[-500:]
-            top_500_cols = X_all.columns[top_500_idx]
+            top_lbl_cols = get_top_500(df_raw, "Label", "Malicious")
+            top_def_cols = get_top_500(df_raw, "Tactic", "Defense Evasion")
+            top_per_cols = get_top_500(df_raw, "Tactic", "Persistence")
 
-            print(f"[DEBUG] Selected top 500 columns: {len(top_500_cols)}")
-            df_raw = df_raw[top_500_cols.tolist() + ["Key", "Label", "Tactic"]]
+            # Union of all important columns
+            union_cols = sorted(set(top_lbl_cols + top_def_cols + top_per_cols))
+            print(f"[DEBUG] Selected total unique columns across all tasks: {len(union_cols)}")
 
-            # ----------  choose CSV to classify if user omitted it  -----
-            if not classify_ready:
-                self.sClassifyCsvPath = self.sTrainingDatasetPath
-                print("[ML] No classify CSV provided -> will classify training set.")
+            # Append essentials
+            final_cols = union_cols + [c for c in ("Key", "Label", "Tactic") if c in df_raw.columns]
+            df_raw = df_raw[final_cols]
 
-            # ----------  train -> evaluate -> save models  --------------
-            print("[DEBUG] Launching training pipeline...")
+            print("[DEBUG] Final cleaned shape before training:", df_raw.shape)
+
+            # Write preprocessed version to a file
+            self.sPreprocessedCsvPath = os.path.splitext(self.sTrainingDatasetPath)[0] + "_preprocessed.csv"
+            df_raw.to_csv(self.sPreprocessedCsvPath, index=False)
+            self.txtProcessedDatasetPath.delete(0, "end")
+            self.txtProcessedDatasetPath.insert(0, self.sPreprocessedCsvPath)
+
             self.trainAndEvaluateModels(df_raw)
 
-            # ----------  classify the chosen CSV  -----------------------
-            self.classifyCsv(self.sClassifyCsvPath)
-            messagebox.showinfo("ML Process Complete", "Training + classification finished!")
-
-        except Exception as exc:
-            messagebox.showerror("Error in ML process", str(exc))
-
+        except Exception as e:
+            print("[ERROR] executeMLProcess():", e)
+            messagebox.showerror("Execution Error", str(e))
 
     ###########################################################################
     #            TRAIN AND EVALUATE MODELS
