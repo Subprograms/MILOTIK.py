@@ -820,21 +820,21 @@ class MILOTIC:
             print("[ML] Using supplied training dataset.")
             trainingdf = pd.read_csv(self.sTrainingDatasetPath, dtype=str, engine="python", on_bad_lines="skip")
 
-            print("[DEBUG] Reading CSV...")
+            print("[INFO] Reading CSV...")
             if trainingdf.columns.duplicated().any():
                 print("[WARNING] Duplicate columns found. Resolving...")
                 trainingdf = trainingdf.loc[:, ~trainingdf.columns.duplicated()]
 
-            print("[DEBUG] CSV Loaded: shape =", trainingdf.shape)
+            print("[INFO] CSV Loaded: shape =", trainingdf.shape)
 
             is_preprocessed = all(col in trainingdf.columns for col in ("Depth", "Key Size", "Value Processed"))
             if is_preprocessed:
-                print("[DEBUG] Dataset appears preprocessed. Skipping redundant processing.")
+                print("[INFO] Dataset appears preprocessed. Skipping redundant processing.")
             else:
                 trainingdf = self.cleanDataframe(trainingdf, drop_all_zero_rows=True, preserve_labels=True)
 
             # ------------------ EARLY PER-MODEL FEATURE REDUCTION -----------------------
-            print("[DEBUG] Starting early tree-based feature reduction (per model)...")
+            print("[INFO] Starting early tree-based feature reduction (per model)...")
 
             def get_top_k(df, target_col, target_val, k=500):
                 X = df.drop(columns=["Key", "Label", "Tactic"], errors="ignore")
@@ -856,9 +856,9 @@ class MILOTIC:
             top_def_cols = get_top_k(trainingdf, "Tactic", "Defense Evasion", k=500)
             top_per_cols = get_top_k(trainingdf, "Tactic", "Persistence", k=500)
 
-            print(f"[DEBUG] Top Label features: {len(top_lbl_cols)}")
-            print(f"[DEBUG] Top Defense features: {len(top_def_cols)}")
-            print(f"[DEBUG] Top Persistence features: {len(top_per_cols)}")
+            print(f"[INFO] Top Label features: {len(top_lbl_cols)}")
+            print(f"[INFO] Top Defense features: {len(top_def_cols)}")
+            print(f"[INFO] Top Persistence features: {len(top_per_cols)}")
 
             # Save 3 reduced CSVs for RFE and model training
             base_path = os.path.splitext(self.sTrainingDatasetPath)[0]
@@ -870,11 +870,11 @@ class MILOTIC:
             trainingdf.loc[:, trainingdf.columns.intersection(top_def_cols + ["Key", "Label", "Tactic"])].to_csv(defense_path, index=False)
             trainingdf.loc[:, trainingdf.columns.intersection(top_per_cols + ["Key", "Label", "Tactic"])].to_csv(persistence_path, index=False)
 
-            print(f"[DEBUG] Saved Label reduced dataset to {label_path}")
-            print(f"[DEBUG] Saved Defense reduced dataset to {defense_path}")
-            print(f"[DEBUG] Saved Persistence reduced dataset to {persistence_path}")
+            print(f"[INFO] Saved Label reduced dataset to {label_path}")
+            print(f"[INFO] Saved Defense reduced dataset to {defense_path}")
+            print(f"[INFO] Saved Persistence reduced dataset to {persistence_path}")
 
-            print("[DEBUG] Launching training + evaluation pipeline...")
+            print("[INFO] Launching training + evaluation pipeline...")
 
             df_label = pd.read_csv(label_path)
             df_defense = pd.read_csv(defense_path)
@@ -976,13 +976,13 @@ class MILOTIC:
                 return selected
 
         # 1) Prepare data for each task
-        print("[DEBUG] Preprocessing all three reduced datasets...")
+        print("[INFO] Preprocessing all three reduced datasets...")
         X_lbl, y_lbl = prepare(df_label, "Label")
         X_def, y_def = prepare(df_defense, "Defense")
         X_per, y_per = prepare(df_persist, "Persistence")
 
         # 2) Split train/test sets
-        print("[DEBUG] Splitting train/test sets...")
+        print("[INFO] Splitting train/test sets...")
         X_lbl_tr, X_lbl_te, y_lbl_tr, y_lbl_te = train_test_split(
             X_lbl, y_lbl, test_size=0.2, stratify=y_lbl, random_state=42
         )
@@ -994,27 +994,27 @@ class MILOTIC:
         )
 
         # 3) Balance via SMOTE
-        print("[DEBUG] Applying SMOTE to balance training data...")
+        print("[INFO] Applying SMOTE to balance training data...")
         sm = SMOTE(random_state=42)
         X_lbl_tr, y_lbl_tr = sm.fit_resample(X_lbl_tr, y_lbl_tr)
         X_def_tr, y_def_tr = sm.fit_resample(X_def_tr, y_def_tr)
         X_per_tr, y_per_tr = sm.fit_resample(X_per_tr, y_per_tr)
 
         # 4) Determine RFE targets
-        print("[DEBUG] Calculating RFE feature counts...")
+        print("[INFO] Calculating RFE feature counts...")
         n_lbl = getN("Label", X_lbl_tr)
         n_def = getN("Defense", X_def_tr)
         n_per = getN("Persistence", X_per_tr)
-        print(f"[DEBUG] RFE targets: Label={n_lbl}, Defense={n_def}, Persistence={n_per}")
+        print(f"[INFO] RFE targets: Label={n_lbl}, Defense={n_def}, Persistence={n_per}")
 
         # 5) Run RFE
-        print("[DEBUG] Running RFE...")
+        print("[INFO] Running RFE...")
         feats_lbl = runRFE(X_lbl_tr, y_lbl_tr, n_lbl, tag="Label")
         feats_def = runRFE(X_def_tr, y_def_tr, n_def, tag="Defense")
         feats_per = runRFE(X_per_tr, y_per_tr, n_per, tag="Persistence")
 
         # 6) Train final models
-        print("[DEBUG] Training models...")
+        print("[INFO] Training models...")
         clf_factory = lambda: BalancedRandomForestClassifier(
             n_estimators=400, random_state=42,
             sampling_strategy="all", replacement=True,
@@ -1025,7 +1025,7 @@ class MILOTIC:
         m_per = clf_factory().fit(X_per_tr[feats_per], y_per_tr)
 
         # 7) Compute optimal thresholds
-        print("[DEBUG] Calculating optimal thresholds (ROC AUC)...")
+        print("[INFO] Calculating optimal thresholds (ROC AUC)...")
         def find_thresh(y_true, scores):
             fpr, tpr, thr = roc_curve(y_true, scores)
             dist = np.sqrt((1 - tpr)**2 + fpr**2)
@@ -1042,7 +1042,7 @@ class MILOTIC:
         }
 
         # 8) Save models
-        print("[DEBUG] Saving trained models...")
+        print("[INFO] Saving trained models...")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.sLabelModelPath       = os.path.join(self.sModelOutputDir, f"label_model_{ts}.joblib")
         self.sTacticModelPath      = os.path.join(self.sModelOutputDir, f"defense_model_{ts}.joblib")
@@ -1052,7 +1052,7 @@ class MILOTIC:
         joblib.dump(m_per, self.sPersistenceModelPath)
 
         # 9) Compute and display metrics
-        print("[DEBUG] Computing metrics...")
+        print("[INFO] Computing metrics...")
         all_metrics = {}
         for tag, mdl, X_e, y_e, pr, feats in [
             ("Label",       m_lbl, X_lbl_te, y_lbl_te, prob_lbl, feats_lbl),
@@ -1069,7 +1069,7 @@ class MILOTIC:
         self.updateMetricsDisplay(all_metrics)
 
         # 10) Update feature importances in GUI
-        print("[DEBUG] Updating feature tab display...")
+        print("[INFO] Updating feature tab display...")
         self.updateFeatureDisplay(
             feats_lbl, m_lbl.feature_importances_,
             feats_def, m_def.feature_importances_,
@@ -1077,12 +1077,12 @@ class MILOTIC:
         )
 
         # 11) Render zoomable trees
-        print("[DEBUG] Drawing tree visualizations...")
+        print("[INFO] Drawing tree visualizations...")
         self.showForestTree(m_lbl, "Label", feats_lbl, X_lbl_tr[feats_lbl], y_lbl_tr)
         self.showForestTree(m_def, "Defense", feats_def, X_def_tr[feats_def], y_def_tr)
         self.showForestTree(m_per, "Persistence", feats_per, X_per_tr[feats_per], y_per_tr)
 
-        print("[DEBUG] Training + evaluation complete.")
+        print("[INFO] Training + evaluation complete.")
 
     def labelGridSearch(self, Xp, yp):
         """
@@ -1135,19 +1135,26 @@ class MILOTIC:
         return gs.best_estimator_
 
     def showForestTree(self, forest, tag: str, feature_names, X_train, y_train):
-        print(f"[DEBUG] showForestTree({tag}) about to redraw canvas")
+        print(f"[INFO] showForestTree({tag}) about to redraw canvas")
 
-        # pick the single best tree
+        # Pick the single best-performing tree
         scores = [est.score(X_train, y_train) for est in forest.estimators_]
-        best   = forest.estimators_[int(np.argmax(scores))]
+        best = forest.estimators_[int(np.argmax(scores))]
 
-        # plot at very high resolution
+        # Set correct class labels based on the tag
+        class_names = {
+            "Label": ["Benign", "Malicious"],
+            "Defense": ["Not Defense Evasion", "Defense Evasion"],
+            "Persistence": ["Not Persistence", "Persistence"]
+        }.get(tag, ["Class 0", "Class 1"])
+
+        # Plot at high resolution
         rcParams.update({"font.size": 9})
         fig, ax = plt.subplots(figsize=(24, 16), dpi=600)
         tree.plot_tree(
             best,
             feature_names=None,
-            class_names=["Benign/Pure", "Positive"],
+            class_names=class_names,
             filled=True, rounded=True,
             impurity=False, proportion=False,
             max_depth=5,
@@ -1156,52 +1163,49 @@ class MILOTIC:
         ax.axis("off")
         fig.tight_layout(pad=0.3)
 
-        # capture as Pillow image
+        # Capture as Pillow image
         buf = BytesIO()
         fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
         pil_full = Image.open(buf)
 
-        # swap in the scrollable Canvas if first time
+        # Replace with scroll-zoom canvas if needed
         self.zoomCanvas(tag)
         canv = self._tree_canvases[tag]["canvas"]
 
-        # select the right tab so it's actually laid out at full size
+        # Select the correct tab so the canvas is visible
         idx = {"Label": 0, "Defense": 1, "Persistence": 2}[tag]
         self.treeNotebook.select(self.treeNotebook.tabs()[idx])
         self.treeNotebook.update_idletasks()
         canv.update_idletasks()
 
         rec = self._tree_canvases[tag]
-        rec["scale"]    = 1.0
+        rec["scale"] = 1.0
         rec["pil_orig"] = pil_full
 
-        # compute fit based on the parent frame’s width as a fallback
+        # Auto-fit the image to available width
         parent = canv.master
         parent.update_idletasks()
         available_width = parent.winfo_width() or canv.winfo_width()
-
         fit_scale = available_width / pil_full.width if available_width > 1 else 1.0
-        # clamp between 0.1 and 1.0 so you never accidentally blow it up
         fit_scale = min(max(fit_scale, 0.1), 1.0)
         rec["scale"] = fit_scale
 
-        new_w = int(pil_full.width  * fit_scale)
+        new_w = int(pil_full.width * fit_scale)
         new_h = int(pil_full.height * fit_scale)
         resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-        preview  = pil_full.resize((new_w, new_h), resample)
-        tk_img   = ImageTk.PhotoImage(preview)
+        preview = pil_full.resize((new_w, new_h), resample)
+        tk_img = ImageTk.PhotoImage(preview)
         rec["tk_img"] = tk_img
 
         canv.delete("all")
         canv.create_image(0, 0, anchor="nw", image=tk_img)
         canv.config(scrollregion=(0, 0, new_w, new_h))
 
-        # force redraw
         self.root.update_idletasks()
-        print(f"[DEBUG] {tag} tree drawn at scale {fit_scale:.2f}")
-    
+        print(f"[INFO] {tag} tree drawn at scale {fit_scale:.2f}")
+
     ###########################################################################
     #                    CLASSIFY CSV
     ###########################################################################
@@ -1287,7 +1291,7 @@ class MILOTIC:
     #                       UPDATING
     ###########################################################################
     def updateMetricsDisplay(self, metrics):
-        print("[DEBUG] updateMetricsDisplay called with:", metrics)
+        print("[INFO] updateMetricsDisplay called with:", metrics)
         # clear out all existing rows
         self.metricsList.delete(*self.metricsList.get_children())
         # repopulate with fresh values
@@ -1300,7 +1304,7 @@ class MILOTIC:
                              lbl_feats, lbl_imps,
                              def_feats, def_imps,
                              per_feats, per_imps):
-        print("[DEBUG] updateFeatureDisplay called")
+        print("[INFO] updateFeatureDisplay called")
         # clear all three feature-tabs
         for tv in self.featureTabsTabs.values():
             tv.delete(*tv.get_children())
