@@ -32,12 +32,12 @@ from sklearn.metrics import (
 from sklearn.feature_selection import RFE
 
 ###########################################################################
-#                           MAIN MILOTIC CLASS
+#                           MAIN MILOTIK CLASS
 ###########################################################################
-class MILOTIC:
+class MILOTIK:
     def __init__(self, root):
         self.root = root
-        self.root.title("MILOTIC")
+        self.root.title("MILOTIK")
         self.root.geometry("1600x780")
         self.root.resizable(True, True)
         
@@ -1329,5 +1329,5 @@ class MILOTIC:
 ###########################################################################
 if __name__ == "__main__":
     root = tk.Tk()
-    app = MILOTIC(root)
+    app = MILOTIK(root)
     root.mainloop()
