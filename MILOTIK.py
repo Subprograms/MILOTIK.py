@@ -283,15 +283,6 @@ class MILOTIK:
             enc = chardet.detect(raw)["encoding"] or "utf-8"
 
         return pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False, on_bad_lines="skip")
-       
-    # def read_csv_with_fallbacks(path):
-    #    """
-    #    For classifyCSV
-    #    """
-    #    raw = open(path, "rb").read(10000)
-    #    enc = chardet.detect(raw)["encoding"] or "utf-8"
-    #    df = pd.read_csv(path, encoding=enc, encoding_errors="replace", dtype=str, low_memory=False)
-    #    return self.cleanDataframe(df_raw, drop_all_zero_rows=True, preserve_labels=True)
     
     def zoomCanvas(self, tag):
         """
@@ -501,97 +492,6 @@ class MILOTIK:
             msg = f"Error in makeDataset: {e}"
             print(msg)
             messagebox.showerror("Error", msg)
-
-    def selectTrainingColumns(self, df):
-        """
-        Keep only:
-          - 'Key'
-          - 'Label'
-          - 'Tactic'
-          - numeric columns like: Depth, Key Size, Subkey Count, Value Count, Value Processed
-          - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_, TypeCategory_
-          - and ensure depth-based PathCategory_*_Depth* columns come right after general PathCategory_ ones
-        """
-        keep_cols = []
-
-        # Column identification
-        for c in df.columns:
-            if c == 'Key':
-                keep_cols.append(c)
-            elif c in ('Label','Tactic'):
-                keep_cols.append(c)
-            elif c in ('Depth','Key Size','Subkey Count','Value Count','Value Processed'):
-                keep_cols.append(c)
-
-        # Separate general path categories from the specific ones for ordering
-        path_cat_cols      = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' not in c]
-        path_specific_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' in c]
-        keep_cols += path_cat_cols + path_specific_cols
-
-        # Include remaining feature–engineered dummies, now with TypeCategory_
-        for c in df.columns:
-            if c.startswith(('TypeGroup_', 'KeyNameCategory_', 'TypeCategory_')):
-                keep_cols.append(c)
-
-        # Drop anything that slipped in
-        return [col for col in keep_cols if col in df.columns]
-
-    def appendToExistingCsv(self, new_df: pd.DataFrame, csv_path: str):
-        """
-        Appends new_df to an existing CSV (csv_path), uniting columns and matching
-        column order. Missing columns/cells are filled with '0', so there are no empty
-        rows/columns in the final CSV.
-
-        Steps:
-          1) Read the existing CSV (if it exists).
-          2) Use new_df's columns as the 'reference order'.
-          3) If the existing CSV has extra columns, append them to the reference.
-          4) Reindex both DataFrames to that unified column list, in that order.
-          5) Fill missing cells with '0'.
-          6) Concatenate row-wise and save.
-        """
-        try:
-            # If the file doesn't exist yet, just save the new DataFrame
-            if not csv_path or not os.path.exists(csv_path):
-                new_df.to_csv(csv_path, index=False)
-                print(f"[appendToExistingCsv] Created new CSV: {csv_path}")
-                return
-
-            # 1) Read existing CSV
-            existing_df = pd.read_csv(csv_path, dtype=str)  # read as string
-
-            # 2) new_df's columns = the "desired" order
-            reference_cols = list(new_df.columns)
-
-            # 3) If the existing CSV has extra columns, keep them too (append them at the end)
-            for col in existing_df.columns:
-                if col not in reference_cols:
-                    reference_cols.append(col)
-
-            # 4) Reindex both DataFrames to that unified list, in that order
-            existing_df = existing_df.reindex(columns=reference_cols)
-            new_df = new_df.reindex(columns=reference_cols)
-
-            # 5) Fill empty or NaN cells with '0'
-            existing_df.fillna("0", inplace=True)
-            new_df.fillna("0", inplace=True)
-            existing_df.replace("", "0", inplace=True)
-            new_df.replace("", "0", inplace=True)
-
-            # 6) Concatenate row-wise
-            combined = pd.concat([existing_df, new_df], ignore_index=True)
-
-            # (Optional) Drop rows that are all '0' if you never want fully empty rows:
-            # combined = combined.loc[~combined.eq("0").all(axis=1)]
-
-            # Finally, save combined
-            combined.to_csv(csv_path, index=False)
-            print(f"[appendToExistingCsv] Appended + Reordered CSV: {csv_path}")
-
-        except Exception as ex:
-            print(f"Error appending to CSV ({csv_path}): {ex}")
-            # As a fallback, just save new_df so data isn't lost
-            new_df.to_csv(csv_path, index=False)
 
     ###########################################################################
     #                          APPLY LABELS
@@ -1209,6 +1109,40 @@ class MILOTIK:
     ###########################################################################
     #                    CLASSIFY CSV
     ###########################################################################
+    def selectTrainingColumns(self, df):
+        """
+        Keep only:
+          - 'Key'
+          - 'Label'
+          - 'Tactic'
+          - numeric columns like: Depth, Key Size, Subkey Count, Value Count, Value Processed
+          - dummy columns that start with PathCategory_, TypeGroup_, KeyNameCategory_, TypeCategory_
+          - and ensure depth-based PathCategory_*_Depth* columns come right after general PathCategory_ ones
+        """
+        keep_cols = []
+
+        # Column identification
+        for c in df.columns:
+            if c == 'Key':
+                keep_cols.append(c)
+            elif c in ('Label','Tactic'):
+                keep_cols.append(c)
+            elif c in ('Depth','Key Size','Subkey Count','Value Count','Value Processed'):
+                keep_cols.append(c)
+
+        # Separate general path categories from the specific ones for ordering
+        path_cat_cols      = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' not in c]
+        path_specific_cols = [c for c in df.columns if c.startswith('PathCategory_') and '_Depth' in c]
+        keep_cols += path_cat_cols + path_specific_cols
+
+        # Include remaining feature–engineered dummies, now with TypeCategory_
+        for c in df.columns:
+            if c.startswith(('TypeGroup_', 'KeyNameCategory_', 'TypeCategory_')):
+                keep_cols.append(c)
+
+        # Drop anything that slipped in
+        return [col for col in keep_cols if col in df.columns]
+    
     def classifyCsv(self, csv_path: str):
         """
         Load a CSV (raw registry dump or preprocessed), apply the stored models
