@@ -1,26 +1,29 @@
 import os
-import tkinter as tk
-import pandas as pd, chardet
-import numpy as np
-import joblib
 import re
+import time
+import joblib
 import chardet
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
-from matplotlib import rcParams
 from io import BytesIO
+from datetime import datetime
+from collections import Counter
 from PIL import Image, ImageTk, Image as _PIL_Image
 from concurrent.futures import ThreadPoolExecutor
+
+import tkinter as tk
 from tkinter import ttk, messagebox
+
 from regipy import RegistryHive
-from datetime import datetime
+
+from matplotlib import rcParams
+
 from sklearn import tree
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
 from sklearn.ensemble import RandomForestClassifier
-from imblearn.ensemble import BalancedRandomForestClassifier
-from sklearn.model_selection import (
-    train_test_split, GridSearchCV, StratifiedKFold
-)
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -29,7 +32,10 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve
 )
-from sklearn.feature_selection import RFE
+from sklearn.feature_selection import RFE, SelectFromModel
+
+from imblearn.over_sampling import SMOTE
+from imblearn.ensemble import BalancedRandomForestClassifier
 
 ###########################################################################
 #                           MAIN MILOTIK CLASS
@@ -801,18 +807,61 @@ class MILOTIK:
         fpr, tpr, thr = roc_curve(y_true, y_score)
         dist = np.sqrt((1 - tpr) ** 2 + fpr ** 2)
         return thr[np.argmin(dist)]
-    
+
     def trainAndEvaluateModels(self, df_label: pd.DataFrame, df_defense: pd.DataFrame, df_persist: pd.DataFrame):
         """
         Accepts three reduced dataframes (top k each): label, defense, persistence.
         Runs SMOTE -> RFE -> trains BRF models -> evaluates -> updates GUI.
         """
-        from sklearn.feature_selection import RFE, SelectFromModel
-        from imblearn.over_sampling import SMOTE
-        from sklearn.metrics import roc_curve
-        import time
-        import numpy as np
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+        def labelGridSearch(Xp, yp):
+            """
+            Return a BalancedRandomForestClassifier tuned for the Label task.
+            """
+            param_grid = {
+                "n_estimators": [50],
+                "max_depth": [None, 25],
+                "min_samples_split": [2],
+                "min_samples_leaf": [1],
+                "bootstrap":         [False],
+                "class_weight":      [{0:1, 1:10}]
+            }
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
+            gs = GridSearchCV(
+                brf,
+                param_grid,
+                cv=cv,
+                scoring="roc_auc",
+                n_jobs=-1,
+                verbose=1
+            )
+            gs.fit(Xp, yp)
+            return gs.best_estimator_
+
+        def tacticGridSearch(Xp, yp):
+            """
+            Return a BalancedRandomForestClassifier tuned for the Tactic tasks.
+            """
+            param_grid = {
+                "n_estimators": [100],
+                "max_depth": [None, 25],
+                "min_samples_split": [2],
+                "min_samples_leaf": [1],
+                "bootstrap":         [False],
+                "class_weight":      [{0:1, 1:10}]
+            }
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
+            gs = GridSearchCV(
+                brf,
+                param_grid,
+                cv=cv,
+                scoring="roc_auc",
+                n_jobs=-1,
+                verbose=1
+            )
+            gs.fit(Xp, yp)
+            return gs.best_estimator_
 
         # helper to prepare X, y for each task
         def prepare(df, task):
@@ -915,14 +964,9 @@ class MILOTIK:
 
         # 6) Train final models
         print("[INFO] Training models...")
-        clf_factory = lambda: BalancedRandomForestClassifier(
-            n_estimators=400, random_state=42,
-            sampling_strategy="all", replacement=True,
-            bootstrap=False
-        )
-        m_lbl = clf_factory().fit(X_lbl_tr[feats_lbl], y_lbl_tr)
-        m_def = clf_factory().fit(X_def_tr[feats_def], y_def_tr)
-        m_per = clf_factory().fit(X_per_tr[feats_per], y_per_tr)
+        m_lbl = labelGridSearch(X_lbl_tr[feats_lbl], y_lbl_tr)
+        m_def = tacticGridSearch(X_def_tr[feats_def], y_def_tr)
+        m_per = tacticGridSearch(X_per_tr[feats_per], y_per_tr)
 
         # 7) Compute optimal thresholds
         print("[INFO] Calculating optimal thresholds (ROC AUC)...")
@@ -983,56 +1027,6 @@ class MILOTIK:
         self.showForestTree(m_per, "Persistence", feats_per, X_per_tr[feats_per], y_per_tr)
 
         print("[INFO] Training + evaluation complete.")
-
-    def labelGridSearch(self, Xp, yp):
-        """
-        Return a BalancedRandomForestClassifier tuned for the Label task.
-        """
-        param_grid = {
-            "n_estimators": [50],
-            "max_depth": [None, 25],
-            "min_samples_split": [2],
-            "min_samples_leaf": [1],
-            "bootstrap":         [False],
-            "class_weight":      [{0:1, 1:10}]
-        }
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
-        gs = GridSearchCV(
-            brf,
-            param_grid,
-            cv=cv,
-            scoring="roc_auc",
-            n_jobs=-1,
-            verbose=1
-        )
-        gs.fit(Xp, yp)
-        return gs.best_estimator_
-
-    def tacticGridSearch(self, Xp, yp):
-        """
-        Return a BalancedRandomForestClassifier tuned for the Tactic tasks.
-        """
-        param_grid = {
-            "n_estimators": [100],
-            "max_depth": [None, 25],
-            "min_samples_split": [2],
-            "min_samples_leaf": [1],
-            "bootstrap":         [False],
-            "class_weight":      [{0:1, 1:10}]
-        }
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        brf = BalancedRandomForestClassifier(sampling_strategy='all', replacement=True, bootstrap=False, random_state=42)
-        gs = GridSearchCV(
-            brf,
-            param_grid,
-            cv=cv,
-            scoring="roc_auc",
-            n_jobs=-1,
-            verbose=1
-        )
-        gs.fit(Xp, yp)
-        return gs.best_estimator_
 
     def showForestTree(self, forest, tag: str, feature_names, X_train, y_train):
         print(f"[INFO] showForestTree({tag}) about to redraw canvas")
