@@ -2,9 +2,9 @@ This Python script, **MILOTIK**, is a sophisticated tool designed for digital fo
 
 ---
 
-# MILOTIK: Machine Learning Windows Registry Classifier
+# MILOTIK: Machine Learning-Based Classification of ATT&CK Tactics and Techniques 
 
-**MILOTIK** (Machine Learning for Incident Logs and Operating System Tactical Information Keys) is a comprehensive pipeline for parsing Windows Registry hives, engineering security-focused features, and training Ensemble ML models to detect indicators of compromise (IoC).
+**MILOTIK** is a comprehensive pipeline for parsing Windows Registry hives, engineering security-focused features, and training Ensemble ML models to detect indicators of compromise (IoC).
 
 ## Key Features
 
